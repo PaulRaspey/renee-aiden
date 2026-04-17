@@ -6,9 +6,9 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** Pre-M0 (architecture complete, implementation not started)
-**Last commit:** initial architecture drop
-**Next milestone:** M0 — Foundation
+**Phase:** M0 complete, M2/M3/M4 landing now
+**Last commit:** `M0: scaffolding, UAHP identity, first tests`
+**Next milestone:** M2 acceptance → M3 acceptance → M4 acceptance
 **Blockers:** None
 
 ## What's Done
@@ -22,20 +22,18 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 - [x] Safety framework
 - [x] Copyright handling doc
 - [x] Her script analysis pipeline spec
+- [x] Git repo initialized, pushed to github.com/PaulRaspey/renee-aiden (private)
+- [x] M0: UAHP identity primitives + agent-per-component keyfiles
+- [x] M0: src scaffolding and dependency install
+- [ ] M0: Audio I/O round-trip test (DEFERRED — text-first path per PJ)
 
-## What's In Progress
+## What's Next
 
-Nothing. Ready for Claude Code to pick up.
-
-## What's Next (M0)
-
-- [ ] Create GitHub repo `PaulRaspey/renee-aiden` (private)
-- [ ] Run `scripts/bootstrap.py`
-- [ ] Set up Python venv
-- [ ] Install UAHP and dependencies
-- [ ] Wire basic UAHP identities for Renée and Aiden
-- [ ] Implement `src/voice/audio_io.py` with mic capture and VAD
-- [ ] Round-trip test: speak, transcribe, fixed response playback
+- [ ] M2 acceptance: 20-prompt opinion consistency + pushback + no sycophancy
+- [ ] M3 acceptance: mood drift over time, patience drop on disagreement, recovery on idle
+- [ ] M4 acceptance: callback test, memory surfaces earlier details contextually
+- [ ] M1 (ASR) — deferred until voice path comes back
+- [ ] M5 (TTS) — deferred, needs reference audio + cloud GPU
 
 ## Known Risks
 
@@ -43,11 +41,17 @@ Nothing. Ready for Claude Code to pick up.
 - Groq API key required for Qwen 3 32B. PJ has this at `~/.bridge_key`.
 - XTTS-v2 model download is large (~2GB), first run will be slow.
 - No reference audio for Renée/Aiden yet. PJ to record between M4 and M5.
+- PyPI `uahp==0.5.4` wheel ships broken (imports missing modules). Vendored local
+  identity shim in `src/identity/uahp_identity.py`. Swap in fixed upstream later
+  without API change.
 
 ## Notes for PJ
 
-- Architecture is complete. Read `SYSTEM.md` to orient.
-- Hand `CLAUDE_CODE_HANDOFF.md` to Claude Code to start.
+- Start a chat: `python -m src.cli.chat` (Renée) or `python -m src.cli.chat --persona aiden`.
+- Commands in the REPL: `/mood`, `/memories`, `/retrieve <query>`, `/receipt`, `/quit`.
+- Mood persists in `state/<persona>_mood.db`, memories in `state/<persona>_memory.db`.
+- Identities persist in `state/identities/*.key.json`. They are signing keys. Do NOT
+  commit — `.gitignore` already covers `state/`.
 - Upload *Her* script when ready for M12. Script text only, no audio.
 - Record reference voice sessions ASAP — see `architecture/01_voice.md` for spec.
 - Budget first month rent on RunPod around $400-500 for dev iteration.
