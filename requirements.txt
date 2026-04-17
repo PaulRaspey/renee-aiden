@@ -1,68 +1,69 @@
-# Core
+# Core (installed for M0-M4 text path)
 python-dotenv>=1.0.0
 pyyaml>=6.0
 pydantic>=2.5.0
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 
-# UAHP stack
-uahp>=0.5.4
+# UAHP stack — PyPI `uahp==0.5.4` wheel is broken (imports missing modules).
+# We currently vendor the identity pattern from PJ's uahp-stack/core.py into
+# src/identity/uahp_identity.py. Re-enable the pin once a fixed upstream lands.
+# uahp>=0.5.4
 
-# Audio I/O
-sounddevice>=0.4.6
-soundfile>=0.12.1
+# Numeric
 numpy>=1.24.0
-scipy>=1.11.0
-webrtcvad>=2.0.10
-opuslib>=3.0.1          # Opus codec for audio bridge
-
-# ASR
-faster-whisper>=1.0.0
-
-# TTS
-TTS>=0.22.0           # Coqui for XTTS-v2
-# chatterbox-tts     # install from source when targeting Chatterbox
 
 # LLM clients
 anthropic>=0.39.0
 groq>=0.11.0
 ollama>=0.3.0
 
-# Vector store
+# Vector store + embeddings
 faiss-cpu>=1.7.4     # use faiss-gpu on workstation
-# sqlite-vss         # install separately per platform
-
-# Embeddings
 sentence-transformers>=3.0.0
 
-# Orchestration
-asyncio-throttle>=1.0.2
+# Async + IO
 aiofiles>=23.2.0
-websockets>=12.0        # audio bridge client/server
-runpod>=1.6.0           # pod management SDK
 
-# Eval & metrics
-matplotlib>=3.8.0
-pandas>=2.1.0
-jinja2>=3.1.0        # for dashboard templates
-fastapi>=0.109.0     # eval dashboard
-uvicorn>=0.27.0
-
-# Audio analysis
-librosa>=0.10.1
-pyloudnorm>=0.1.1
-
-# Utilities
-rich>=13.7.0         # nice CLI output
-click>=8.1.7         # CLI commands
-python-json-logger>=2.0.7
+# CLI utilities
+rich>=13.7.0
+click>=8.1.7
+jinja2>=3.1.0        # eval dashboard templates
 
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
-pytest-cov>=4.1.0
 
-# Dev
-black>=23.12.0
-ruff>=0.1.11
-mypy>=1.8.0
+# ------------------------------------------------------------------------
+# NOT installed yet (pulled in by future milestones):
+# ------------------------------------------------------------------------
+# Audio I/O (M0 round-trip / M14 bridge):
+#   sounddevice>=0.4.6
+#   soundfile>=0.12.1
+#   scipy>=1.11.0
+#   webrtcvad>=2.0.10
+#   opuslib>=3.0.1
+# ASR (M1):
+#   faster-whisper>=1.0.0
+# TTS + emotional prosody (M5-M7):
+#   TTS>=0.22.0
+# Audio analysis (M5-M6):
+#   librosa>=0.10.1
+#   pyloudnorm>=0.1.1
+# Cloud bridge (M14):
+#   websockets>=12.0
+#   runpod>=1.6.0
+# Eval dashboard (M11):
+#   matplotlib>=3.8.0
+#   pandas>=2.1.0
+#   fastapi>=0.109.0
+#   uvicorn>=0.27.0
+# Orchestration:
+#   asyncio-throttle>=1.0.2
+# Dev tooling:
+#   black>=23.12.0
+#   ruff>=0.1.11
+#   mypy>=1.8.0
+#   pytest-cov>=4.1.0
+#   python-json-logger>=2.0.7
+

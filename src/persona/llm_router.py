@@ -11,6 +11,7 @@ For text-first M2 we only need Groq + Ollama. Anthropic is wired but optional.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,7 +82,7 @@ class LLMRouter:
         ollama_host: str | None = None,
     ):
         self.groq_model = groq_model or os.environ.get("GROQ_MODEL", "qwen/qwen3-32b")
-        self.ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL", "gemma3:4b")
+        self.ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
         self.anthropic_model = anthropic_model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
         self.ollama_host = ollama_host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
@@ -118,13 +119,32 @@ class LLMRouter:
             if self.groq_client is None:
                 raise RuntimeError("Groq client unavailable (no GROQ_API_KEY / ~/.bridge_key).")
             full = [{"role": "system", "content": system_prompt}] + messages
-            resp = self.groq_client.chat.completions.create(
-                model=self.groq_model,
-                messages=full,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                reasoning_effort="none",  # qwen3 — we want the voice, not the CoT
-            )
+            # Handle TPM rate limits on the free/on-demand tier by parsing the
+            # recommended retry-after hint from Groq's 429 body and sleeping.
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    resp = self.groq_client.chat.completions.create(
+                        model=self.groq_model,
+                        messages=full,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        reasoning_effort="none",  # qwen3 — voice, not CoT
+                    )
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    if "rate_limit_exceeded" not in msg or attempts > 6:
+                        raise
+                    wait = 3.0
+                    m = re.search(r"try again in ([0-9.]+)s", msg)
+                    if m:
+                        try:
+                            wait = float(m.group(1)) + 0.5
+                        except ValueError:
+                            pass
+                    time.sleep(min(wait, 30.0))
             latency = (time.time() - t0) * 1000
             text = resp.choices[0].message.content or ""
             usage = resp.usage

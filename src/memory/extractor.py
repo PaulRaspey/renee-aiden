@@ -50,7 +50,7 @@ class MemoryExtractor:
             return
         host = self.ollama_host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self.client = ollama.Client(host=host)
-        self.model = self.ollama_model or os.environ.get("OLLAMA_MODEL", "gemma3:4b")
+        self.model = self.ollama_model or os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
 
     def extract(self, user_text: str, assistant_text: str) -> list[dict]:
         if self.client is None:
