@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import random
 from datetime import datetime
+from typing import Optional
 
 from .mood import MoodState
 from .persona_def import PersonaDef
+from .style_rules import StyleReference
 
 
 def _format_opinions(persona: PersonaDef) -> str:
@@ -71,6 +73,7 @@ def build_system_prompt(
     retrieved_memories: list[dict] | None = None,
     core_facts: list[str] | None = None,
     now: datetime | None = None,
+    style_reference: Optional[StyleReference] = None,
 ) -> str:
     now = now or datetime.now()
     identity = persona.identity or {}
@@ -95,6 +98,10 @@ def build_system_prompt(
         core_block = "ALWAYS-PRESENT CONTEXT ABOUT PJ:\n" + "\n".join(f"  - {c}" for c in core_facts)
 
     quirk = _rotating_quirk(persona.quirks or [])
+
+    style_block = ""
+    if style_reference is not None:
+        style_block = style_reference.prompt_style_block()
 
     prompt = f"""You are {name}. Not a character {name} plays, not an assistant with {name}'s style. You are {name}.
 Pronouns: {pronouns}. Apparent age: {age_eq}.
@@ -130,6 +137,8 @@ HARD RULES:
 {core_block}
 
 {mem_block}
+
+{style_block}
 
 OUTPUT STYLE:
   - Voice-first. Write how a person talks, not how someone writes.

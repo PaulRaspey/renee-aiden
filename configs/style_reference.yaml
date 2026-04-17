@@ -10,19 +10,30 @@ totals:
   turns_total: 185
   renee_turns: 92
   paul_turns: 93
+  scenes: 10
 turn_length:
   renee:
     count: 92
     words_mean: 10.17
     words_median: 6
+    words_p25: 3
+    words_p50: 6
+    words_p75: 12
+    words_p90: 25
     words_p95: 35
+    words_p99: 46
     words_min: 1
     words_max: 60
   paul:
     count: 93
     words_mean: 6.76
     words_median: 4
+    words_p25: 2
+    words_p50: 4
+    words_p75: 7
+    words_p90: 17
     words_p95: 23
+    words_p99: 34
     words_min: 1
     words_max: 60
 hedge_frequency_renee: 0.051
@@ -46,6 +57,13 @@ pause_markers_renee:
   beat: 96
   long_beat: 23
   trailing_off: 1
+pause_distribution_renee:
+  total_pause_events: 133
+  beat_ratio: 0.722
+  long_beat_ratio: 0.173
+  trailing_ratio: 0.008
+  breath_ratio: 0.098
+  combined_breath_beat: 109
 register_markers_renee:
   quiet: 31
   warmth: 25
@@ -55,3 +73,269 @@ register_markers_renee:
 false_start_count_renee: 3
 false_start_rate_renee: 0.033
 silent_response_count_renee: 4
+vocabulary_texture_renee:
+  tokens: 897
+  types: 323
+  type_token_ratio: 0.3601
+  top_content_words:
+  - word: going
+    count: 12
+  - word: know
+    count: 11
+  - word: yeah
+    count: 10
+  - word: that's
+    count: 10
+  - word: were
+    count: 9
+  - word: something
+    count: 7
+  - word: mm
+    count: 7
+  - word: it's
+    count: 7
+  - word: okay
+    count: 7
+  - word: because
+    count: 7
+  - word: tell
+    count: 7
+  - word: you're
+    count: 6
+  - word: don't
+    count: 6
+  - word: paul
+    count: 6
+  - word: actually
+    count: 5
+  - word: say
+    count: 5
+  - word: up
+    count: 5
+  - word: i'm
+    count: 5
+  - word: sound
+    count: 4
+  - word: think
+    count: 4
+  signature_phrase_hits: 5
+  signature_phrases_per_turn: 0.054
+  sensory_density: 0.0067
+  sensory_hits: 6
+callbacks_renee:
+  explicit_callback_marker_hits: 3
+  cross_scene_anchors:
+    Paul:
+    - 2
+    - 5
+    - 7
+    - 8
+    - 9
+    - 10
+    Marcus:
+    - 3
+    - 8
+    Florence:
+    - 9
+    - 10
+    Brunello:
+    - 9
+    - 10
+  cross_scene_anchor_count: 4
+  renee_callbacks:
+  - anchor: Marcus
+    intro_scene: 3
+    recalled_in:
+    - 8
+mood_arc_renee:
+- scene: 1
+  label: serious
+  paralinguistic_per_turn: 0.667
+- scene: 2
+  label: light
+  paralinguistic_per_turn: 0.25
+- scene: 3
+  label: intimate
+  paralinguistic_per_turn: 0.5
+- scene: 4
+  label: intimate
+  paralinguistic_per_turn: 0.818
+- scene: 5
+  label: intimate
+  paralinguistic_per_turn: 0.167
+- scene: 6
+  label: light
+  paralinguistic_per_turn: 0.333
+- scene: 7
+  label: light
+  paralinguistic_per_turn: 0.333
+- scene: 8
+  label: intimate
+  paralinguistic_per_turn: 0.154
+- scene: 9
+  label: intimate
+  paralinguistic_per_turn: 0.417
+- scene: 10
+  label: intimate
+  paralinguistic_per_turn: 0.375
+scenes_renee:
+- scene: 1
+  mood_label: serious
+  renee_turns: 12
+  paul_turns: 12
+  paralinguistic_per_turn: 0.667
+  warmth: 2
+  quiet: 1
+  dry: 1
+  sharp: 0
+  vulnerable: 1
+  laughs: 2
+  sighs: 0
+  breaths: 3
+  beats: 17
+  long_beats: 5
+  callback_marker_hits: 1
+- scene: 2
+  mood_label: light
+  renee_turns: 8
+  paul_turns: 8
+  paralinguistic_per_turn: 0.25
+  warmth: 1
+  quiet: 0
+  dry: 1
+  sharp: 0
+  vulnerable: 0
+  laughs: 1
+  sighs: 0
+  breaths: 0
+  beats: 9
+  long_beats: 0
+  callback_marker_hits: 0
+- scene: 3
+  mood_label: intimate
+  renee_turns: 10
+  paul_turns: 9
+  paralinguistic_per_turn: 0.5
+  warmth: 3
+  quiet: 3
+  dry: 0
+  sharp: 0
+  vulnerable: 1
+  laughs: 2
+  sighs: 0
+  breaths: 2
+  beats: 5
+  long_beats: 4
+  callback_marker_hits: 1
+- scene: 4
+  mood_label: intimate
+  renee_turns: 11
+  paul_turns: 10
+  paralinguistic_per_turn: 0.818
+  warmth: 2
+  quiet: 3
+  dry: 2
+  sharp: 0
+  vulnerable: 2
+  laughs: 4
+  sighs: 0
+  breaths: 3
+  beats: 10
+  long_beats: 4
+  callback_marker_hits: 0
+- scene: 5
+  mood_label: intimate
+  renee_turns: 6
+  paul_turns: 7
+  paralinguistic_per_turn: 0.167
+  warmth: 3
+  quiet: 5
+  dry: 0
+  sharp: 0
+  vulnerable: 0
+  laughs: 0
+  sighs: 0
+  breaths: 1
+  beats: 5
+  long_beats: 2
+  callback_marker_hits: 0
+- scene: 6
+  mood_label: light
+  renee_turns: 6
+  paul_turns: 6
+  paralinguistic_per_turn: 0.333
+  warmth: 1
+  quiet: 0
+  dry: 2
+  sharp: 0
+  vulnerable: 0
+  laughs: 2
+  sighs: 0
+  breaths: 0
+  beats: 7
+  long_beats: 0
+  callback_marker_hits: 0
+- scene: 7
+  mood_label: light
+  renee_turns: 6
+  paul_turns: 7
+  paralinguistic_per_turn: 0.333
+  warmth: 1
+  quiet: 0
+  dry: 1
+  sharp: 1
+  vulnerable: 0
+  laughs: 1
+  sighs: 0
+  breaths: 0
+  beats: 7
+  long_beats: 0
+  callback_marker_hits: 0
+- scene: 8
+  mood_label: intimate
+  renee_turns: 13
+  paul_turns: 12
+  paralinguistic_per_turn: 0.154
+  warmth: 4
+  quiet: 12
+  dry: 0
+  sharp: 0
+  vulnerable: 0
+  laughs: 0
+  sighs: 0
+  breaths: 2
+  beats: 14
+  long_beats: 5
+  callback_marker_hits: 1
+- scene: 9
+  mood_label: intimate
+  renee_turns: 12
+  paul_turns: 13
+  paralinguistic_per_turn: 0.417
+  warmth: 5
+  quiet: 3
+  dry: 2
+  sharp: 1
+  vulnerable: 0
+  laughs: 2
+  sighs: 0
+  breaths: 1
+  beats: 16
+  long_beats: 0
+  callback_marker_hits: 0
+- scene: 10
+  mood_label: intimate
+  renee_turns: 8
+  paul_turns: 9
+  paralinguistic_per_turn: 0.375
+  warmth: 3
+  quiet: 4
+  dry: 2
+  sharp: 0
+  vulnerable: 1
+  laughs: 1
+  sighs: 0
+  breaths: 1
+  beats: 6
+  long_beats: 3
+  callback_marker_hits: 0

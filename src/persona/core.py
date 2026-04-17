@@ -26,6 +26,7 @@ from .llm_router import LLMResponse, LLMRouter
 from .mood import MoodState, MoodStore
 from .persona_def import PersonaDef, load_persona
 from .prompt_assembler import build_system_prompt
+from .style_rules import StyleReference, load_style_reference
 
 
 @dataclass
@@ -91,6 +92,8 @@ class PersonaCore:
         self.router = router or LLMRouter()
         self.memory_store = memory_store  # may be None in pure M2 mode
         self.metrics = MetricsStore(self.state_dir)
+        style_ref_path = Path(config_dir) / "style_reference.yaml"
+        self.style_reference: StyleReference | None = load_style_reference(style_ref_path)
 
     # ------------------------------------------------------------------
     # Public API
@@ -122,6 +125,7 @@ class PersonaCore:
             mood,
             retrieved_memories=retrieved,
             core_facts=core_facts,
+            style_reference=self.style_reference,
         )
         messages = history + [{"role": "user", "content": user_text}]
 

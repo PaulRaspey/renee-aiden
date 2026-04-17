@@ -327,8 +327,29 @@ class ProsodyPlanner:
     calls — state is carried by the paralinguistic injector.
     """
 
-    def __init__(self, rules_path: Optional[Path | str] = None, *, rules: Optional[dict] = None):
+    def __init__(
+        self,
+        rules_path: Optional[Path | str] = None,
+        *,
+        rules: Optional[dict] = None,
+        style_reference: Any = None,
+    ):
         self.rules = rules if rules is not None else load_rules(rules_path)
+        # M12: let a measured style reference override the per-tone density
+        # targets. The extractor's mood_arc is mapped to conversation-tone
+        # keys in style_rules.paralinguistic_density_by_tone; whatever it
+        # reports for a tone replaces the rule-table value. Tones absent
+        # from the measured data keep the YAML default so we never end up
+        # with missing keys.
+        if style_reference is not None and hasattr(style_reference, "paralinguistic_density_by_tone"):
+            measured = style_reference.paralinguistic_density_by_tone() or {}
+            if measured:
+                density = dict(self.rules.get("paralinguistic_density", {}))
+                density.update(measured)
+                self.rules["paralinguistic_density"] = density
+                self.rules.setdefault("_style_overrides", []).append(
+                    "paralinguistic_density from reference mood_arc"
+                )
 
     # ------------------------------------------------------------------
 

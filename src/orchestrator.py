@@ -253,7 +253,10 @@ class Orchestrator:
                 memory_store=memory_store,
             )
 
-        self.prosody = ProsodyPlanner(rules_path=prosody_rules_path)
+        style_ref = getattr(self.persona_core, "style_reference", None)
+        self.prosody = ProsodyPlanner(
+            rules_path=prosody_rules_path, style_reference=style_ref,
+        )
         self.turn_controller = TurnController()
         self.classifier = TurnClassifier()
 
