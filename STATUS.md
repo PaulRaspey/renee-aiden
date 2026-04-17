@@ -6,12 +6,12 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9 green. XTTS-v2 model load still needs GPU for audio rendering.
+**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9, M10 green. XTTS-v2 model load still needs GPU for audio rendering.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M9 backchannel layer: clause/question/emotional/intimate triggers; hard-blocked during disagreement, distress, heated`
-**Next milestone:** M10 integration orchestrator
-**Blockers:** None for M7-M9 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
+**Last commit:** `M10 orchestrator: persona + mood + memory + prosody + paralinguistics + turn-taking wired; per-layer telemetry`
+**Next milestone:** M11 eval harness
+**Blockers:** None for M7-M10 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
 
 ## How to resume
 
@@ -90,6 +90,17 @@ Claude Code updates this file at the end of each work session. PJ reads it first
       affirmations/thinking categories via the M6 ClipLibrary; emitted
       at -6dB. Min 1.8s between fires (configurable), max 8/minute
       (configurable). Deterministic given RNG seed. 25 unit tests pass.
+- [x] **M10: orchestrator** — `src/orchestrator.py`. `Orchestrator.text_turn`
+      is the single entry point in text-sim mode. Pipeline:
+      persona.respond -> TurnClassifier -> ParalinguisticInjector.plan ->
+      ProsodyPlanner.plan -> TurnController.plan_response_latency. Returns
+      a `TurnOutput` with text, prosody plan, injections, context flags,
+      latency plan, mood before/after, completion receipt, and
+      `LayerTelemetry` (per-layer ms). `observe_user_audio_tick` is the
+      live-audio seam: runs endpointer + backchannel per tick, routes
+      interruptions. Telemetry written as JSONL at
+      `state/orchestrator.jsonl` per turn. Graceful fallback when the
+      paralinguistic library isn't on disk. 18 unit tests pass.
 
 ## What's next (rough order)
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
