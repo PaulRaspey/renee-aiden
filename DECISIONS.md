@@ -173,3 +173,124 @@ Append-only. Each decision logged with: date, context, options, choice, rational
       (`[surprised gasp]`) kept tripping the empty-text validator. Rewrote
       to `Oh [surprised gasp].` and backfilled. Metadata rebuild confirms
       3,600 clips across all 24 subcategories.
+
+---
+
+## 2026-04-17 — M7 prosody + M8 turn-taking + M9 backchannel + M10 orchestrator + M11 eval harness
+
+**Context:** Credits-until-dry build session. Text-simulation mode only
+(no live audio, no GPU). All five milestones landed green with tests.
+
+**Decisions:**
+
+31. **Prosody hard rule: vulnerable admission always gets sharp_in breath,
+    even when blocks-effects is set.**
+    - architecture/04_paralinguistics.md says "no paralinguistics during
+      disagreement, correction, hard-truth delivery, or user distress"
+      and the M6 injector's `blocks_paralinguistics()` drops ALL output
+      when any of those flags are set, including mandatory ones. The M7
+      brief contradicts this: "Vulnerability always gets (breath in)
+      before it, hard rule."
+    - Resolution: the vulnerability breath is structural — it IS the
+      opening beat of the admission, not ornamentation. The prosody
+      layer re-inserts it after the block check, so the injector can
+      drop everything and the breath still lands. Other paralinguistics
+      stay blocked. Same breath survives the max-per-turn cap.
+
+32. **Sentence pause by mood uses the architecture's period_ms_by_mood
+    table exactly; dramatic pre-pauses stack via max, not sum.**
+    - `dramatic_before_emotional` (1200ms) and `dramatic_before_callback`
+      (300ms) could both trigger on the same turn. Addition produces
+      1500ms which is within reason but reads as dramatic + punctuation
+      pileup. Using `max()` keeps the larger beat and drops the smaller,
+      which matches real cadence.
+
+33. **Heuristic endpointer rather than a small neural model.**
+    - architecture/05_turn_taking.md targets a ~100M-param model. We
+      don't have one trained, and the consumer API only needs a float
+      in [0,1]. Replaced with a piecewise silence ramp plus transcript
+      completeness signals (terminal punctuation, comma, continuation
+      words, filler tails, short-transcript penalty). Swap for a real
+      model later without changing the `decide(...)` surface.
+
+34. **Terminal-punctuation short-transcript exemption.**
+    - Tiny complete turns like "Whatever." or "Yeah." should commit.
+      Initial rule penalised <3-word transcripts indiscriminately,
+      which blocked legitimate one-word closers. Fixed: the short-
+      transcript penalty only applies when the transcript doesn't
+      already end with `. ! ?`.
+
+35. **Sustain gate on commit (150ms, 100ms tick granularity).**
+    - One tick above p=0.9 isn't a commit; a transient spike could fire
+      a response while the user's still breathing mid-sentence. Sustain
+      timer accumulates on successive high-p ticks and resets on any
+      drop. Matches the architecture's "p > 0.9 sustained for 150ms"
+      language.
+
+36. **Response latency has a hard floor (80ms) and a clamped jitter
+    range (0.75x..1.30x).**
+    - The gaussian random multiplier can underflow to zero or go 3x in
+      rare tails, which produces either sociopathically fast replies or
+      dead air. Clamp in the controller, not the caller.
+
+37. **Renée-interrupts cap uses a rolling window of turn indices, not
+    time.**
+    - Architecture specifies "max 1 interruption per 10 turns." We count
+      turn boundaries via `on_turn_boundary()` and maintain a deque of
+      interrupt-turn indices. A quiet hour shouldn't let the cap
+      "recharge"; a chatty 10-turn burst keeps the cap pressed down.
+
+38. **Backchannel layer fires at -6dB via config default; rate caps
+    (min gap, max/minute) are orthogonal from trigger probability.**
+    - Architecture calls for -6dB mix and rate scaling with warmth.
+      Implemented trigger probability as a multiplicative stack
+      (base × warmth × intimacy × tone × trigger_type). Rate caps are
+      gate checks before probability math so we never roll when we're
+      about to drop anyway. Keeps the probability math interpretable.
+
+39. **Hard block on backchannel during disagreement / distress / heated.**
+    - architecture/04 and /05 both call this out. The block is cheap
+      and absolute: the layer returns 0.0 before doing any work. Users
+      will not tolerate mhm-ing while they're falling apart.
+
+40. **Orchestrator classifier is heuristic; the seam is intentional.**
+    - `TurnClassifier.classify(user_text, response_text, mood)` is crude
+      string matching. M11 proves we can measure the result; a small
+      LLM classifier can drop in later without touching the
+      orchestrator. Keeping it heuristic now means text-sim tests run
+      in milliseconds.
+
+41. **Per-layer telemetry as JSONL at state/orchestrator.jsonl.**
+    - MetricsStore already stores per-turn totals for the persona core.
+      Orchestrator writes a richer per-turn line with per-layer
+      breakdowns (persona_respond_ms, injector_plan_ms, prosody_plan_ms,
+      classify_ms) plus the classified context and paralinguistic_count.
+      JSONL keeps dashboard reads cheap and tailing trivial.
+
+42. **Eval scorers are stateless heuristic functions, not an LLM judge.**
+    - An LLM-as-judge pass would be cleaner for `emotional_congruence`
+      and `pushback` but adds token cost to every probe run. For M11
+      alpha, heuristic suffices: they already cover the architecture's
+      seven measurable axes (hedge_rate, sycophancy, ai-isms, length,
+      callback_hit, emotional_congruence, pushback) plus
+      opinion_consistency for persona-aware checks.
+
+43. **A/B queue random-swaps labels on queue, not on read.**
+    - Rater can't tell which side is the candidate. Swap happens inside
+      `queue_pair`, stored to SQLite as `label_a` / `label_b`. Keeps
+      the read path trivial: no need to re-seed an RNG per fetch.
+
+44. **Style extractor runs on the original reference script
+    (scripts/renee_reference_script.md), NOT on *Her*.**
+    - PJ wrote a richly annotated reference script as original work.
+      Architecture decision #3 forbids training on *Her*; the extractor
+      honors that by only touching the original script. M12 proper
+      (Her analysis) remains a separate milestone with its own
+      copyright review.
+
+45. **Dashboard renders offline from SQLite + JSONL, no JS framework.**
+    - architecture/06 asked for `localhost:7860/eval`. The nightly run
+      just dumps a self-contained `eval_dashboard.html`. If PJ wants
+      a live HTTP server later, `python -m http.server` on the state
+      dir gets him the same URL. Keeps the eval surface one `open`
+      command away without a server dependency.
