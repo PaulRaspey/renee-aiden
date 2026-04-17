@@ -141,6 +141,14 @@ class OutputFilters:
 
         # strip chain-of-thought / assistant preamble artifacts
         t = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Groq (Qwen) occasionally leaks an ip_reminder system tag. Kill both
+        # the closed and orphan forms, plus any leading "[ip_reminder]: ..." /
+        # "ip_reminder:" line the model produces as a prose fallback.
+        t = re.sub(r"<ip_reminder\b[^>]*>.*?</ip_reminder>", "", t, flags=re.DOTALL | re.IGNORECASE)
+        t = re.sub(r"</?ip_reminder\b[^>]*>", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"^\s*\[?ip_reminder\]?\s*:\s*.*?$", "", t, flags=re.IGNORECASE | re.MULTILINE)
+        if "ip_reminder" in text.lower() and "ip_reminder" not in t.lower():
+            report.hits.append("ip_reminder")
         t = re.sub(r"^assistant\s*:\s*", "", t, flags=re.IGNORECASE).strip()
         t = re.sub(r"^(?:renée|renee|aiden)\s*:\s*", "", t, flags=re.IGNORECASE).strip()
 

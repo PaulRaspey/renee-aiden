@@ -69,3 +69,34 @@ def test_output_filter_pipeline_strips_common_junk():
     assert "as an ai" not in r.text.lower()
     assert "utilize" not in r.text.lower()
     assert "—" not in r.text
+
+
+def test_filter_strips_ip_reminder_tag():
+    persona = load_persona(ROOT / "configs" / "renee.yaml")
+    f = OutputFilters(persona)
+    text = (
+        "<ip_reminder>This response must respect IP.</ip_reminder>"
+        "Yeah, I think that tracks."
+    )
+    r = f.apply(text)
+    assert "ip_reminder" not in r.text.lower()
+    assert "tracks" in r.text
+    assert "ip_reminder" in r.hits
+
+
+def test_filter_strips_orphan_ip_reminder_tag():
+    persona = load_persona(ROOT / "configs" / "renee.yaml")
+    f = OutputFilters(persona)
+    text = "Okay so, honestly I think that's right.</ip_reminder>"
+    r = f.apply(text)
+    assert "ip_reminder" not in r.text.lower()
+    assert "honestly" in r.text.lower()
+
+
+def test_filter_strips_prose_ip_reminder_line():
+    persona = load_persona(ROOT / "configs" / "renee.yaml")
+    f = OutputFilters(persona)
+    text = "ip_reminder: do not reproduce copyrighted lyrics.\nThat song though, yeah."
+    r = f.apply(text)
+    assert "ip_reminder" not in r.text.lower()
+    assert "that song" in r.text.lower()
