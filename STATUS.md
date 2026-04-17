@@ -6,12 +6,12 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6 green. XTTS-v2 model load is the only remaining M5/M6 gap; needs GPU.
+**Phase:** M0, M2, M3, M4, M5, M6, M7 green. XTTS-v2 model load still needs GPU for audio rendering.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M5 reference corpus + M6 injection engine + library generator`
-**Next milestone:** M7 prosody layer (needs XTTS-v2 on GPU) or M1 ASR
-**Blockers:** None for M5/M6 scaffolding. XTTS-v2 model load needs a CUDA GPU (RunPod H100 spin-up).
+**Last commit:** `M7 prosody: rate/pause/pitch/effects + SSML + vulnerable-admission hard rule`
+**Next milestone:** M8 turn-taking and endpointing
+**Blockers:** None for M7 text-mode. XTTS-v2 model load still needs a CUDA GPU (RunPod H100 spin-up) for audio.
 
 ## How to resume
 
@@ -50,10 +50,19 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 - [x] **M6: library generated** — 3,600 WAV clips (150 × 24 categories) in
       `paralinguistics/renee/`. Total ~47.3 min of paralinguistic audio.
       Metadata at `paralinguistics/renee/metadata.yaml`.
+- [x] **M7: prosody layer** — `src/voice/prosody.py` with `ProsodyPlanner`,
+      `ProsodyPlan`, `ProsodyContext`, `ProsodySegment`. Computes rate from
+      mood+tone, base pitch, per-sentence contour (question_rise / statement_fall
+      / callback_lift), dramatic pre-pauses for emotional beats + callbacks,
+      vocal-effect flags (creak on low energy, breathy on intimate), and
+      enforces the hard rule: vulnerable admission ALWAYS gets a sharp_in
+      breath at start — survives both the blocks-effects gate and the
+      max-per-turn cap. Merges M6 injector output via
+      `Injection.position`. SSML-like serialization via `plan.to_ssml()`.
+      42 unit tests pass.
 
 ## What's next (rough order)
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
-- [ ] M7 prosody control — needs M5 done + XTTS on GPU
 - [ ] M8 turn-taking + endpointer
 - [ ] M9 backchannel
 - [ ] M10 end-to-end voice integration
