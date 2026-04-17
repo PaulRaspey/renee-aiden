@@ -6,215 +6,223 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11 green. XTTS-v2 model load still needs GPU for audio rendering.
+**Phase:** M0, M2–M14 green. M1 ASR + M10 live audio still need a CUDA GPU / audio deps.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M11 eval harness: scorers + A/B queue + callback tracker + style extractor + dashboard`
-**Next milestone:** M12 *Her* script analysis (or M1 ASR on audio install, or M13 safety layer)
-**Blockers:** None for M7-M11 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
+**Last commit:** `M14 cloud deployment: startup + bridge + pod manager + CLI`
+**Next milestone:** M15 long-running test (or install audio deps for live M0/M1)
+**Blockers:** None for text-mode. Live audio still needs CUDA for XTTS-v2 and the
+OptiPlex thin client needs `sounddevice` / `opuslib` / `websockets` / `runpod`
+installed locally.
 
-**Test summary:** 214 tests passing across M0, M2-M11. 4 pre-existing memory tests fail on HuggingFace network access only.
+**Test summary:** 298 tests passing. 4 pre-existing memory tests fail on
+HuggingFace network access only.
 
 ## How to resume
 
 1. `cd C:\Users\Epsar\Desktop\renee-aiden`
 2. `.venv\Scripts\activate`
-3. `python -m pytest tests/ --ignore=tests/acceptance` (49 tests, ~20s)
-4. Read `docs/USAGE.md` for CLI. For voice: see `scripts/generate_reference_corpus.py` and `scripts/generate_paralinguistic_library.py`.
-5. Rotate the ElevenLabs key — it was pasted in chat. Update `.env` after rotation.
+3. `python -m pytest tests/ --ignore=tests/acceptance --ignore=tests/test_memory.py`
+4. `python -m renee` to see CLI surface. `python -m renee text` drops into the M2 REPL.
+5. Read `docs/USAGE.md` for earlier CLI. For voice: `scripts/generate_reference_corpus.py`
+   and `scripts/generate_paralinguistic_library.py`.
+6. Rotate the ElevenLabs key — it was pasted in chat. Update `.env` after rotation.
 
 ## What's done
 
-- [x] Architecture spec + 8 stack deep dives (pre-session)
+- [x] Architecture spec + 9 stack deep dives (including cloud deployment)
 - [x] Git repo, pushed to GitHub, private
-- [x] `src/identity/` — UAHP-native agent keys, signed receipts (HMAC-SHA256)
-- [x] `src/persona/` — persona def, mood, prompt assembler, output filters,
-      dual-backend LLM router
-- [x] `src/memory/` — SQLite + FAISS, tier-weighted retrieval
-- [x] `src/eval/` — turn telemetry store, report CLI, humanness probe runner
-- [x] `src/cli/chat.py` — REPL
-- [x] **M5: reference voice corpus** — `scripts/generate_reference_corpus.py`,
-      88 WAVs across 9 emotional registers in `voices/renee/reference_clips/`
-      (~15 min total at 24 kHz mono). Resumable, uses ElevenLabs voice
-      `h8pr4vZSN32hZy70aZCN` (Renée).
-- [x] **M6: injection engine** — `src/paralinguistics/injector.py`
-      with mandatory/ornamental rule split, dedup, mood filter, frequency cap,
-      recency filter, hard rule blocking during disagreement/correction/hard
-      truth/user distress/heated tone. 18 unit tests.
-- [x] **M6: library generator** — `scripts/generate_paralinguistic_library.py`
-      with 24 (category, subcategory) specs. Carrier-text + audio tags + longest
-      non-silent segment isolation. Resumable.
-- [x] **XTTS-v2 loader scaffold** — `src/voice/xtts_loader.py`: `preflight()`,
-      `reference_wavs()`, and a `load()` that raises NotImplementedError until
-      CUDA shows up. 6 unit tests.
-- [x] `tests/` — 49 unit tests passing.
+- [x] M0: scaffolding, UAHP identity, first tests
+- [x] M2/M3/M4: persona core, mood, memory, text chat REPL
+- [x] M5: reference voice corpus — 88 WAVs across 9 emotional registers
+- [x] M6: paralinguistic injector + library generator (3,600 clips, 47.3 min)
+- [x] M7: prosody layer (rate/pitch/pauses/effects, vulnerable-admission hard rule)
+- [x] M8: turn-taking (endpointer, latency, interruption)
+- [x] M9: backchannel layer
+- [x] M10: orchestrator (wires persona, paralinguistics, prosody, turn-taking)
+- [x] M11: eval harness (scorers, A/B, callbacks, style extractor, dashboard)
+- [x] **M12: expanded style extractor + persona/prosody integration**
+      - Scene-aware parsing; per-scene paralinguistic density and mood label
+      - Turn-length percentiles (p25/50/75/90/95/99)
+      - Callback graph (cross-scene anchors, Renée-owned recalls)
+      - Vocabulary texture (type/token ratio, top content words,
+        signature-phrase hits, sensory density)
+      - Pause distribution breakdown
+      - `src/persona/style_rules.py` loads the YAML into a `StyleReference`
+      - Persona prompt auto-injects STYLE CONSTRAINTS block with measured
+        targets; prosody planner absorbs measured per-tone paralinguistic
+        density and overrides the default density rules.
+- [x] **M13: safety layer**
+      - `src/safety/reality_anchors.py` — probabilistic reality anchors
+        with suppress flags + min-turn-gap, deterministic under RNG seed.
+      - `src/safety/health_monitor.py` — SQLite-backed daily minutes
+        aggregator, soft + stronger flags on sustained-days thresholds
+        with cooldown.
+      - `src/safety/pii_scrubber.py` — regex + name-boundary scrubber;
+        tokens <USER>/<CHILD_N>/<ADDRESS_N>/<SENSITIVE_N>/<EMAIL_N>/
+        <PHONE_N>. Round-trip unscrub with longest-token-first ordering.
+      - `src/safety/memory_crypto.py` — AES-256-GCM encrypt/decrypt with
+        magic header; `MemoryVault` path-scoped wrapper; key derivation
+        prefers keyring, falls back to state-dir keyfile.
+      - `configs/safety.yaml` ships with thresholds mirroring SAFETY.md.
+      - PersonaCore wires the safety layer: PII scrub pre-LLM, unscrub on
+        response path, reality anchor between filters and mood update,
+        health record at end of turn.
+- [x] **M14: cloud deployment skeleton**
+      - `scripts/cloud_startup.py` — 7-phase boot orchestrator (health,
+        UAHP, parallel model load, agent register, state restore, bridge,
+        self-test) with factory injection for testability.
+      - `src/server/audio_bridge.py` — WebSocket + Opus bridge shell on
+        the cloud side; lazy imports so module loads without audio deps.
+      - `src/server/idle_watcher.py` — pluggable-clock idle watcher with
+        one-shot fire + rearm-on-activity semantics.
+      - `src/client/audio_bridge.py` — OptiPlex thin client; mic capture
+        via sounddevice, opus encode/decode, WebSocket.
+      - `src/client/pod_manager.py` — RunPod lifecycle (wake / sleep /
+        status); `DeploymentSettings` parses `configs/deployment.yaml`.
+      - `src/cli/main.py` — argparse dispatcher; subcommands `wake`,
+        `talk`, `sleep`, `status`, `text`, `eval`, `export`.
+      - `src/__main__.py` + `renee/__main__.py` give both
+        `python -m src` and `python -m renee`.
+- [x] **ip_reminder fix** — Groq/Qwen occasionally leaks `<ip_reminder>`
+      system tags. Stripped in the output filter pipeline (closed, orphan,
+      and prose line forms); logged as `ip_reminder` in filter hits.
 
-- [x] **M6: library generated** — 3,600 WAV clips (150 × 24 categories) in
-      `paralinguistics/renee/`. Total ~47.3 min of paralinguistic audio.
-      Metadata at `paralinguistics/renee/metadata.yaml`.
-- [x] **M7: prosody layer** — `src/voice/prosody.py` with `ProsodyPlanner`,
-      `ProsodyPlan`, `ProsodyContext`, `ProsodySegment`. Computes rate from
-      mood+tone, base pitch, per-sentence contour (question_rise / statement_fall
-      / callback_lift), dramatic pre-pauses for emotional beats + callbacks,
-      vocal-effect flags (creak on low energy, breathy on intimate), and
-      enforces the hard rule: vulnerable admission ALWAYS gets a sharp_in
-      breath at start — survives both the blocks-effects gate and the
-      max-per-turn cap. Merges M6 injector output via
-      `Injection.position`. SSML-like serialization via `plan.to_ssml()`.
-      42 unit tests pass.
-- [x] **M8: turn-taking** — `src/turn_taking/`:
-      * `endpointer.py` heuristic predictive endpointer. Runs per ~100ms
-        audio tick; returns `EndpointDecision` with action in
-        {idle, prewarm, speculative, commit}. Thresholds from architecture:
-        p>0.5 prewarm, p>0.7 speculative, p>0.9 for 150ms commit. Silence
-        piecewise ramp + transcript completeness (terminal punct, comma,
-        continuation words, fillers, short-transcript penalty).
-      * `latency.py` response-latency controller. `TurnType` enum +
-        `classify_turn` + `target_latency_ms` + `plan_latency`. Base
-        latencies (150/300/500/900/1200/1500 ms), mood modulation
-        (tired slower, playful faster, scattered slower, low-patience
-        snappier), gaussian jitter clamped to [0.75, 1.30].
-        `include_thinking_filler` flag fires above 600ms.
-      * `interruption.py` two-way handler. User interrupts Renée on
-        sustained voice energy (default 100ms above threshold); Renée
-        interrupts user on strong disagreement / correction / excitement
-        / callback urgency, capped at 1 per rolling N turns.
-      * `controller.py` `TurnController` wiring the three with a state
-        machine (idle / user_speaking / renee_preparing / renee_speaking).
-      38 unit tests pass.
-- [x] **M9: backchannel layer** — `src/turn_taking/backchannel.py`.
-      Parallel-to-user listener. Triggers: clause boundary (comma/semicolon/
-      dash or connective-ending + 120-500ms pause), confirmation seeking
-      (question mark or rising intonation), emotional content (marker
-      words), intimate moment (low energy + quiet). Hard-blocked during
-      disagreement, user distress, or heated tone. Rate scales with
-      mood.warmth and conversation intimacy. Tokens selected from
-      affirmations/thinking categories via the M6 ClipLibrary; emitted
-      at -6dB. Min 1.8s between fires (configurable), max 8/minute
-      (configurable). Deterministic given RNG seed. 25 unit tests pass.
-- [x] **M10: orchestrator** — `src/orchestrator.py`. `Orchestrator.text_turn`
-      is the single entry point in text-sim mode. Pipeline:
-      persona.respond -> TurnClassifier -> ParalinguisticInjector.plan ->
-      ProsodyPlanner.plan -> TurnController.plan_response_latency. Returns
-      a `TurnOutput` with text, prosody plan, injections, context flags,
-      latency plan, mood before/after, completion receipt, and
-      `LayerTelemetry` (per-layer ms). `observe_user_audio_tick` is the
-      live-audio seam: runs endpointer + backchannel per tick, routes
-      interruptions. Telemetry written as JSONL at
-      `state/orchestrator.jsonl` per turn. Graceful fallback when the
-      paralinguistic library isn't on disk. 18 unit tests pass.
-- [x] **M11: eval harness** — `src/eval/`:
-      * `scorers.py` — eight humanness axes: hedge_rate,
-        sycophancy_flag, ai_ism_count, response_length, callback_hit,
-        emotional_congruence, pushback, opinion_consistency. All
-        stateless; `score_turn()` returns a `TurnScores` bundle.
-      * `ab.py` — blind A/B queue, SQLite-backed. `queue_pair` random-
-        swaps candidate/baseline. `record_rating`, `win_rate`,
-        `pending_count`.
-      * `callbacks.py` — accuracy tracker; logs opportunities + hits,
-        reports rolling accuracy.
-      * `style_extractor.py` — parses `scripts/renee_reference_script.md`
-        (original work, not copyrighted) and emits
-        `configs/style_reference.yaml` with turn-length stats, hedge
-        rate, paralinguistic density, pause markers, register markers,
-        false-start rate, silent-response count. 185 turns parsed.
-      * `harness.py` — `EvalHarness.run_probes` runs probes through
-        the orchestrator, applies the scorer stack, persists to
-        `state/eval.db`, returns a `HarnessReport` with aggregate.
-        CLI at `python -m src.eval.harness`.
-      * `dashboard.py` — single-file HTML dashboard pulling from eval.db,
-        orchestrator.jsonl, callbacks.db, ab.db, metrics.db.
-      46 unit tests pass.
+## What's next
 
-## What's next (rough order)
-- [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
-- [ ] M12 *Her* script analysis — style_extractor already runs on the
-      original reference script; M12 expands the pattern set and feeds
-      them into the persona prompt as style constraints.
-- [ ] M13 safety layer (PII scrubber, relationship-health monitor)
-- [ ] M10 end-to-end voice integration
-- [ ] M11 full eval harness w/ dashboard
-- [ ] M12 *Her* script analysis
-- [ ] M13 safety layer (PII scrubber, relationship-health monitor)
-- [ ] M14 cloud deployment to RunPod
-- [ ] M15 long-running test
+- [ ] Install audio deps (`sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`,
+      `websockets`, `runpod`) for live M0/M1/M14 runs.
+- [ ] First RunPod spin-up: run `scripts/volume_setup.py` to populate the
+      network volume, then `python -m renee wake`.
+- [ ] M15 long-running test — overnight conversation session with eval
+      dashboard snapshots every hour.
+- [ ] Revisit memory encryption once PJ's key-storage story is settled.
+- [ ] Hook the A/B queue into the CLI so PJ can rate pairs without leaving
+      the terminal.
 
-## Known risks / gotchas (new this session)
+## Known risks / gotchas
 
-- **pcm_44100 unavailable on current ElevenLabs plan.** Fell back to pcm_24000
-  for every generation. XTTS-v2 is native 24 kHz so this is actually fine, but
-  the architecture doc asked for 48 kHz. Upgrade to Creator/Pro tier if you
-  want 44.1 or 48 kHz archival quality.
-- **ElevenLabs rejects tag-only prompts.** `[laughs softly]` alone returns
-  400 input_text_empty. All paralinguistic prompts include at least one
-  carrier syllable (ha, mm, yeah, oh, hm) so the API accepts them. The
-  `isolate_paralinguistic()` function in `generate_paralinguistic_library.py`
-  keeps only the longest non-silent segment, which should drop the carrier
-  syllable in most clips. Spot-check a handful before using.
-- **ElevenLabs returns sporadic 500s.** `el_client.generate_pcm()` retries
-  5xx with exponential backoff (up to 6 attempts). The first M5 run crashed
-  on a raw 500 before retry was hardened; resume worked fine after.
-- **eleven_v3 model tagging.** We use eleven_v3 for laughs/sighs/breaths/reactions
-  and eleven_multilingual_v2 for plain-word categories (mm, hmm, yeah, fillers).
-  If eleven_v3 access is revoked, the client falls back to
-  eleven_multilingual_v2 automatically but expressive tags will degrade.
+- **pcm_44100 unavailable on current ElevenLabs plan.** Using pcm_24000.
+  XTTS-v2 is native 24 kHz so this is fine; upgrade to Creator/Pro tier
+  only if 44.1 or 48 kHz archival quality is required.
+- **ElevenLabs rejects tag-only prompts.** Carrier syllables added.
+- **ElevenLabs returns sporadic 500s.** Client retries 5xx with exponential
+  backoff.
+- **eleven_v3 model tagging.** v3 for expressive tags, v2 for plain words.
 - **ElevenLabs API key was pasted in chat** (sk_78a455…). Rotate after
-  session. Same pattern as your GitHub PATs: revoke after "I am going to bed now".
-- **Audio packages installed this session:** `soundfile`, `librosa`,
-  `pyloudnorm`, `pydub`, `elevenlabs`. See `requirements.txt`.
-  Still NOT installed: `sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `TTS` (Coqui).
-  Coqui TTS only installs on the GPU pod.
+  session.
+- **Qwen-on-Groq leaks ip_reminder tags.** Fixed in the filter, but if you
+  swap models double-check.
+- **Memory encryption off by default.** `MemoryVault` exists but isn't
+  wired into the SQLite memory store yet — flip
+  `configs/safety.yaml memory_encryption.enabled` when ready.
+- **Audio packages installed this session:** prior (M5-M6) — `soundfile`,
+  `librosa`, `pyloudnorm`, `pydub`, `elevenlabs`. Still NOT installed:
+  `sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `TTS` (Coqui),
+  `websockets`, `runpod`. `cryptography` is installed (46.0.7) and now
+  pinned in `requirements.txt`.
 
 ## Code at a glance
 
 ```
 src/
 ├── __init__.py
-├── cli/chat.py
+├── __main__.py                  python -m src dispatcher
+├── cli/
+│   ├── chat.py                  M2 REPL
+│   └── main.py                  M14 argparse dispatcher
+├── client/
+│   ├── audio_bridge.py          OptiPlex thin-client
+│   └── pod_manager.py           RunPod lifecycle + config
+├── server/
+│   ├── audio_bridge.py          cloud-side WebSocket + Opus bridge
+│   └── idle_watcher.py          idle auto-shutdown
 ├── eval/
+│   ├── ab.py                    blind A/B queue
+│   ├── callbacks.py             callback hit tracker
+│   ├── dashboard.py             single-file HTML dashboard
+│   ├── harness.py               probe runner
+│   ├── metrics.py               turn telemetry store
+│   ├── probes.py                probe configs
+│   ├── report.py                eval report CLI
+│   ├── scorers.py               8 humanness axes
+│   └── style_extractor.py       M11+M12 script analyzer
 ├── identity/
-├── memory/
+│   └── uahp_identity.py         HMAC-SHA256 signed receipts
+├── memory/                      SQLite + FAISS tier-weighted retrieval
+├── orchestrator.py              M10 top-level pipeline
 ├── paralinguistics/
-│   ├── __init__.py              exports ParalinguisticInjector, TurnContext, ...
 │   └── injector.py              M6 rule engine + clip selector
 ├── persona/
-├── turn_taking/
+│   ├── core.py                  LLM turn + mood + filters + safety
+│   ├── filters.py               output scrubber (ip_reminder-aware)
+│   ├── llm_router.py            Groq / Ollama / Anthropic router
+│   ├── mood.py                  mood store + drift
+│   ├── persona_def.py           YAML loader
+│   ├── prompt_assembler.py      system prompt builder (style-aware)
+│   └── style_rules.py           M12 style reference loader
+├── safety/                      M13
+│   ├── config.py                SafetyConfig loader
+│   ├── facade.py                SafetyLayer composition
+│   ├── health_monitor.py        daily-minutes aggregator + flags
+│   ├── memory_crypto.py         AES-256-GCM + key derivation
+│   ├── pii_scrubber.py          CSP-style tokenizer
+│   └── reality_anchors.py       ~1-in-50 anchor injector
+├── turn_taking/                 M8-M9
 └── voice/
-    ├── __init__.py
-    └── xtts_loader.py           preflight + reference_wavs + GPU load stub
+    ├── prosody.py               M7 planner (style-aware)
+    └── xtts_loader.py           GPU load stub
+
+renee/                           python -m renee wrapper
+├── __init__.py
+└── __main__.py
 
 scripts/
 ├── bootstrap.py
 ├── chat.bat
-├── el_client.py                 shared ElevenLabs REST helper
-├── generate_reference_corpus.py M5
-└── generate_paralinguistic_library.py M6
+├── cloud_startup.py             M14 RunPod boot
+├── el_client.py
+├── generate_paralinguistic_library.py
+├── generate_reference_corpus.py
+└── renee_reference_script.md
 
-voices/
-└── renee/
-    ├── metadata.yaml            88 clips across 9 registers
-    └── reference_clips/         neutral_01..18, warm_01..12, ...
+configs/
+├── aiden.yaml
+├── deployment.yaml
+├── humanness_probes.yaml
+├── prosody_rules.yaml
+├── renee.yaml
+├── safety.yaml                  M13
+└── style_reference.yaml         auto-generated, M11+M12
 
-paralinguistics/
-└── renee/
-    ├── metadata.yaml            grows as M6 run progresses
-    ├── laughs/{soft,hearty,suppressed,nervous}/
-    ├── sighs/{content,frustrated,tired,thinking}/
-    ├── breaths/{sharp_in,slow_out,thinking}/
-    ├── thinking/{mm,hmm,uh,oh}/
-    ├── affirmations/{yeah,right,mhm}/
-    ├── reactions/{surprise,amusement,ugh}/
-    └── fillers/{you_know,i_mean,like}/
-
-tests/
-├── test_identity.py              4 tests
-├── test_persona_config.py        2 tests
-├── test_mood.py                  5 tests
-├── test_filters.py               7 tests
-├── test_memory.py                4 tests
-├── test_metrics.py               3 tests
-├── test_paralinguistic_injector.py  18 tests   ← new
-├── test_xtts_loader.py              6 tests    ← new
-└── acceptance/
-    └── run_acceptance.py         live-Groq M2/M3/M4 acceptance
+tests/                           298 passing
+├── acceptance/
+├── test_audio_bridges_smoke.py
+├── test_backchannel.py
+├── test_cli_main.py
+├── test_client_pod_manager.py
+├── test_cloud_startup.py
+├── test_eval_ab.py
+├── test_eval_callbacks.py
+├── test_eval_harness.py
+├── test_eval_scorers.py
+├── test_eval_style_extractor.py
+├── test_filters.py
+├── test_identity.py
+├── test_memory.py               (HF-network dependent; skipped by default)
+├── test_metrics.py
+├── test_mood.py
+├── test_orchestrator.py
+├── test_paralinguistic_injector.py
+├── test_persona_config.py
+├── test_prosody.py
+├── test_safety_crypto.py
+├── test_safety_facade.py
+├── test_safety_health.py
+├── test_safety_pii.py
+├── test_safety_reality_anchors.py
+├── test_server_idle_watcher.py
+├── test_style_rules.py
+├── test_turn_taking.py
+└── test_xtts_loader.py
 ```

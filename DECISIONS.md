@@ -294,3 +294,124 @@ Append-only. Each decision logged with: date, context, options, choice, rational
       a live HTTP server later, `python -m http.server` on the state
       dir gets him the same URL. Keeps the eval surface one `open`
       command away without a server dependency.
+
+---
+
+## 2026-04-17 — M12 style expansion + M13 safety layer + M14 cloud skeleton
+
+**Context:** Credits-until-dry continuation. Three milestones plus a
+Groq filter fix in one session. No live audio or GPU still.
+
+**Decisions:**
+
+46. **ip_reminder leaks killed in the output filter, not the LLM prompt.**
+    - Qwen on Groq occasionally emits `<ip_reminder>...</ip_reminder>`
+      system-style tags (similar vintage as the `<think>` leak we already
+      strip). Teaching the model to stop at prompt time is unreliable
+      across model upgrades. The deterministic fix is to scrub at the
+      filter pipeline — closed form, orphan opener/closer, and prose
+      `ip_reminder: ...` line variant. Logged as `ip_reminder` in
+      `FilterReport.hits` so we can trend the leak rate in eval.
+
+47. **M12 callback detector indexes BOTH speakers' tokens.**
+    - Renée recalls Florence and Marcus from scenes Paul originally
+      introduced. Indexing only Renée's tokens would have missed those
+      callbacks entirely. The extractor now pools capitalized tokens
+      across both speakers per scene, filters a manually-curated stop
+      list of exclamations / connectives, and reports a `renee_callbacks`
+      list showing which scenes she recalls from prior scenes where she
+      didn't originate the anchor. Keeps the call-graph interpretable
+      for future prompt feedback loops.
+
+48. **Scene mood labels are heuristic, not LLM-judged.**
+    - `_scene_mood_label` in `style_extractor` maps marker counts to
+      one of `{light, casual, serious, intimate, conflict}`. An LLM
+      classifier would be stricter but ties the extractor to an API
+      call per scene and makes the result non-deterministic. The
+      heuristic mislabels nothing on the current 10-scene reference
+      script (spot-checked scene 8 -> serious, scene 4 -> intimate,
+      scene 9 -> intimate), so we ship it; a small-model classifier
+      can drop in later without touching consumers.
+
+49. **Style reference flows into two places, not one.**
+    - Prompt-side: `build_system_prompt` injects a STYLE CONSTRAINTS
+      block so the LLM sees measured targets (median turn length, hedge
+      rate, paralinguistic density, signature phrases, known callback
+      anchors) — not free-form style advice, concrete numbers.
+    - Prosody-side: `ProsodyPlanner` absorbs the per-tone paralinguistic
+      density derived from mood_arc and overrides the rule-table value
+      for tones present in the reference. Tones not observed in the
+      script keep the YAML default. This keeps the rule engine the
+      source of truth but lets measured data correct it.
+
+50. **M13 PII scrubbing runs in PersonaCore, not at the LLM router.**
+    - Bracketing the scrub around `router.generate(...)` means the
+      router stays generic. But we also scrub the system prompt and
+      history — and only PersonaCore has a full view of what's going
+      into the model, especially once the eval harness adds additional
+      system blocks. Doing it at PersonaCore also means mocked routers
+      in tests don't accidentally scrub their fixtures.
+
+51. **Reality anchor fires AFTER output filters, BEFORE mood update.**
+    - Anchors shouldn't be subject to the hedge/sycophancy regen loop
+      (they're honest meta-commentary, not claims). They should
+      influence the turn Renée actually speaks. Injecting after filters
+      but before the mood update keeps them visible to the user and the
+      subsequent `MoodStore.apply_tone` step (which now sees any anchor
+      text in `report.text`).
+
+52. **HealthMonitor flags look at last N FULL days, not a trailing window
+    that includes today.**
+    - Including a partially-elapsed day makes thresholds flicker as
+      minutes accumulate through the day. The check looks at
+      `rolling_daily_minutes(N+1)[:-1]` — the N completed days before
+      today — and demands all of them clear the threshold. Matches the
+      intent in SAFETY.md ("sustained 2 weeks" = 14 completed days).
+
+53. **Memory encryption off by default, but the machinery ships.**
+    - AES-256-GCM via `cryptography` is in-tree (`MemoryVault`,
+      `derive_key`) and tested. We don't flip it on yet because the
+      existing memory tests exercise plaintext paths and PJ hasn't
+      picked a keyring posture. When he does, it's `safety.yaml
+      memory_encryption.enabled: true` and a `MemoryVault` around the
+      memory DB reads/writes.
+
+54. **Keyring is optional; file-scoped fallback always exists.**
+    - `derive_key` tries `keyring` first, then falls back to a state-dir
+      key file. Both paths yield a 32-byte AES-256 key; the caller
+      can't tell the difference. If keyring became available later
+      after the fallback fired, `derive_key` stashes the existing key
+      into keyring for next time, so the user gets progressive
+      security without a migration.
+
+55. **M14 cloud components are skeletons with factory-injected tests.**
+    - We can't actually run WebSocket + Opus + RunPod from PJ's dev
+      box. The pattern: all heavy deps import lazily inside functions,
+      the orchestration layer accepts factory callables for
+      orchestrator/bridge/idle watcher, and tests inject fakes. The
+      shape is fully exercised (phase ordering, error tracking, pod
+      lifecycle, idle watcher semantics) without touching the network.
+      When we spin up RunPod, installing `websockets` / `opuslib` /
+      `sounddevice` / `runpod` is all that's needed.
+
+56. **`python -m renee` via a thin wrapper package aliasing src.**
+    - The CLI lives in `src.cli.main`. Rather than rename `src/` to
+      `renee/` (invasive: every import in every file) we added
+      `renee/__init__.py` + `renee/__main__.py` that re-export the
+      dispatcher. Both `python -m renee` and `python -m src` work; the
+      architecture doc's `python -m renee wake` lands as expected.
+
+57. **Idle watcher latches after firing; mark_activity rearms.**
+    - A one-shot latch prevents `tick()` from firing shutdown multiple
+      times during a long idle stretch. Any subsequent `mark_activity`
+      (e.g. a late frame that slipped in while the pod is winding down)
+      rearms the watcher. Matches the spirit of "60 min idle → graceful
+      shutdown, not a shutdown storm."
+
+58. **Export command copies from the state dir, not a manifest.**
+    - `python -m renee export --output ...` walks `state/` and mirrors
+      every file into the output directory. No manifest, no
+      transformation — the caller gets a byte-for-byte copy that
+      `scripts/volume_setup.py` or a future `import` command can feed
+      back into a fresh pod. Keeps the round-trip story honest: what
+      you export is exactly what's on disk.

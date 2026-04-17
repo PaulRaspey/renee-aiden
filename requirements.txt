@@ -4,6 +4,9 @@ pyyaml>=6.0
 pydantic>=2.5.0
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
+# Crypto for M13 memory-vault. Ships in the venv already; explicit pin so
+# fresh installs get the same surface.
+cryptography>=42.0.0
 
 # UAHP stack — PyPI `uahp==0.5.4` wheel is broken (imports missing modules).
 # We currently vendor the identity pattern from PJ's uahp-stack/core.py into
@@ -53,9 +56,12 @@ elevenlabs>=2.40.0
 #   faster-whisper>=1.0.0
 # TTS + emotional prosody (M5-M7, GPU-only):
 #   TTS>=0.22.0
-# Cloud bridge (M14):
+# Cloud bridge (M14 — skeleton code lazy-imports these; install on the pod):
 #   websockets>=12.0
 #   runpod>=1.6.0
+#   opuslib>=3.0.1
+# Memory-key storage (M13, optional — file-scoped key used when absent):
+#   keyring>=25.0.0
 # Eval dashboard (M11):
 #   matplotlib>=3.8.0
 #   pandas>=2.1.0
