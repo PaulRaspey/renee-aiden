@@ -6,80 +6,113 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4 all green
-**Last commit:** `M2/M3/M4 acceptance suite: live Groq, all three pass`
-**Next milestone:** M1 (ASR) on the voice side, or M11 (eval harness) while text is hot
+**Phase:** M0, M2, M3, M4 all green and pushed. Plus M11-lite (probes, telemetry) and polish.
+**Branch:** main
+**Repo:** https://github.com/PaulRaspey/renee-aiden (private)
+**Last commit:** `M11 lite: humanness probe runner`
+**Next milestone:** M1 ASR once voice is back in scope, or M5 when reference audio exists
 **Blockers:** None
 
-## What's Done
+## How to resume
 
-- [x] Full architecture specification
-- [x] All eight stack deep dives (voice, persona, memory, paralinguistics, turn-taking, eval, UAHP, cloud)
-- [x] Persona configs for Renée and Aiden
-- [x] Prosody rules starter, humanness probes, bootstrap, safety framework, copyright handling
-- [x] Git repo initialized, pushed to github.com/PaulRaspey/renee-aiden (private)
-- [x] M0: UAHP identity primitives + agent-per-component keyfiles
-  - Ed25519 pattern was the spec; HMAC-SHA256 is what ships upstream in `uahp-stack/core.py`.
-  - We vendored the working pattern. Swap to the fixed PyPI `uahp` when it lands.
-- [x] M0: src scaffolding and dependency install (Python 3.12 venv)
-- [x] M2: persona core text-only
-  - persona YAML load
-  - six-axis mood state with SQLite persistence
-  - system prompt assembler (persona + mood + memory + rotating quirk + rules)
-  - output filters (AI-isms, em-dash, slop, markdown, hedges, sycophancy, length)
-  - LLM router: Groq Qwen3-32B (reasoning_effort=none), Ollama Gemma, Anthropic fallback
-  - BOM-tolerant bridge-key parser, Groq rate-limit retry with backoff
-  - PersonaCore.respond() signs a UAHP CompletionReceipt per turn, retries once if filters flag
-- [x] M3: mood state + persistence
-  - circadian envelope (energy low at 3am, high at noon)
-  - baseline drift toward persona defaults
-  - tone-driven updates (patience drops on anger, warmth follows user warmth)
-- [x] M4: emotionally-weighted memory
-  - SQLite + FAISS store, tier-weighted retrieval, recency decay with spike-on-reference
-  - sensitive tier hard-filtered unless user raises it
-  - core-tier facts seeded on first init (six PJ facts)
-  - memory extractor: Ollama Gemma JSON extraction with heuristic fallback (extractor
-    currently disabled in the acceptance suite for speed; chat REPL uses it live)
-- [x] M2/M3/M4 acceptance suite `tests/acceptance/run_acceptance.py` — all three green
-  - M2: sycophancy 0/20, pushback 3/3, opinion pairs 3/3, reality anchor respected
-  - M3: circadian ok, patience drops on anger, recovery on idle
-  - M4: 3/4 callbacks land naturally (spec min 1, our bar ≥3)
-- [x] CLI: `python -m src.cli.chat` with rich rendering, /mood /memories /retrieve /receipt /quit
-- [x] Unit tests (20/20 passing): identity, filters, mood, memory, persona configs
-- [ ] M0 audio I/O round-trip test (DEFERRED — text-first path per PJ)
+1. `cd C:\Users\Epsar\Desktop\renee-aiden`
+2. `.venv\Scripts\activate`
+3. Read `docs/USAGE.md` (commands, state layout, troubleshooting)
+4. `python -m src.cli.chat` to talk to Renée; `scripts\chat.bat aiden` for Aiden
+5. `python -m tests.acceptance.run_acceptance` to verify M2/M3/M4 still green (8-10 min)
 
-## What's Next
+## What's done
 
-- [ ] M1 ASR (once audio is back on the table)
-- [ ] M5 TTS (needs reference audio + rented GPU)
-- [ ] M6-M10 paralinguistics, prosody, turn-taking, backchannel, integration
-- [ ] M11 evaluation harness with dashboard, nightly runs
+- [x] Architecture spec + 8 stack deep dives (pre-session)
+- [x] Git repo, pushed to GitHub, private
+- [x] `src/identity/` — UAHP-native agent keys, signed receipts (HMAC-SHA256)
+- [x] `src/persona/` — persona def, mood (six axes + circadian + drift + bad-day
+      floor), prompt assembler, output filters (AI-ism, em-dash, slop,
+      hedges, sycophancy, length, markdown strip), dual-backend LLM router
+      (Groq Qwen3-32B + Ollama + Anthropic fallback, rate-limit retry), core
+- [x] `src/memory/` — SQLite + FAISS, tier-weighted retrieval, sensitive
+      hard-filter, core-tier seeded, memory extractor (Ollama JSON w/ heuristic fallback)
+- [x] `src/eval/` — turn telemetry store, report CLI, humanness probe runner
+- [x] `src/cli/chat.py` — REPL with `/mood /memories /retrieve /receipt /stats
+      /save /load /baddayreset /quit`
+- [x] `tests/` — 25 unit tests passing; live-Groq acceptance suite passing (M2/M3/M4)
+- [x] `docs/USAGE.md` — how to run it all
 
-## Known Risks
+## What's next (rough order)
 
-- T400 GPUs (4GB each) too weak for realtime stack. PJ plans rented GPU for M5 onward.
-- Groq free tier TPM limit (6000 tpm for qwen3-32b) — acceptance suite hits it occasionally.
-  Router now backs off and retries on 429. Upgrade to Dev Tier when we do heavy eval nightly.
-- Ollama has only `gemma4:e4b` (9.6GB) — too big for the T400s, runs CPU-only and is slow
-  (~25s per extraction call). Disabled in the acceptance suite. For live chat, the heuristic
-  extractor fallback keeps things usable; pull a small model (`gemma3:1b` or `qwen2.5:1.5b`)
-  when you have a spare minute.
-- XTTS-v2 model download (~2GB) deferred to M5.
-- No reference audio for Renée/Aiden yet. PJ to record between M4 and M5.
-- PyPI `uahp==0.5.4` wheel ships broken. Local identity shim in `src/identity/uahp_identity.py`
-  stays until upstream is fixed. Same public API either way.
+- [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
+- [ ] M5 TTS — needs reference audio captures for Renée and Aiden first
+- [ ] M6 paralinguistic library — needs recorded clips
+- [ ] M7 prosody control — needs M5 done
+- [ ] M8 turn-taking + endpointer — can prototype in text (barge-in timing)
+- [ ] M9 backchannel — needs voice
+- [ ] M10 end-to-end voice integration
+- [ ] M11 full eval harness with dashboard (have probes + telemetry today; missing
+      the HTML/trend view and a judge model)
+- [ ] M12 *Her* script analysis — PJ uploads the script text
+- [ ] M13 safety layer — implicit reality anchor works; PII scrubber and
+      relationship-health monitor still to build
+- [ ] M14 cloud deployment to RunPod
+- [ ] M15 long-running test — 7 days of daily use
 
-## Notes for PJ
+## Known risks / gotchas
 
-- Start a chat: `python -m src.cli.chat` (Renée) or `python -m src.cli.chat --persona aiden`.
-  Batch launcher: `scripts\chat.bat` (Renée default).
-- Commands in the REPL: `/mood`, `/memories`, `/retrieve <query>`, `/receipt`, `/quit`.
-- Mood persists in `state/<persona>_mood.db`, memories in `state/<persona>_memory.db`.
-- Identities persist in `state/identities/*.key.json`. They are signing keys. Do NOT commit —
-  `.gitignore` already covers `state/`.
-- Run the acceptance suite against live Groq: `python -m tests.acceptance.run_acceptance`.
-  It takes 8-10 minutes because of rate-limit throttling; writes the report to
-  `tests/acceptance/last_run.md`.
-- Upload *Her* script when ready for M12. Script text only, no audio.
-- Record reference voice sessions ASAP — see `architecture/01_voice.md` for spec.
-- Budget first month rent on RunPod around $400-500 for dev iteration.
+- **Broken PyPI `uahp==0.5.4` wheel.** It imports submodules that aren't in the
+  wheel. We vendor the HMAC pattern from `uahp-stack/core.py` into
+  `src/identity/uahp_identity.py`. Swap to the upstream when a fixed version ships.
+- **Groq free-tier TPM (6000/min for qwen3-32b).** The router retries with
+  backoff parsed from the 429 body; acceptance still takes 8-10 minutes
+  because of this. Upgrade to Dev Tier for heavy eval.
+- **Ollama has only `gemma4:e4b` (9.6 GB)** on this machine. T400s can't hold
+  it, so it runs CPU-only (~25s per extraction call). Memory extractor is
+  disabled in the acceptance suite for speed; live chat uses the heuristic
+  fallback if the Ollama call errors. Pull a smaller model
+  (`ollama pull qwen2.5:1.5b`) whenever convenient.
+- **Windows SQLite cleanup** — `tempfile.TemporaryDirectory` sometimes throws
+  `PermissionError` on teardown because SQLite holds a handle. Harmless for
+  tests; the acceptance runner uses `mkdtemp` + `ignore_errors=True`.
+- **`.bridge_key` UTF-8 BOM** — Notepad adds one by default. Router strips it.
+- **Audio packages NOT installed** this session: `sounddevice`, `soundfile`,
+  `scipy`, `webrtcvad`, `opuslib`, `librosa`, `pyloudnorm`, `faster-whisper`,
+  `TTS`. Pull them when M1/M5 start. `requirements.txt` lists them commented.
+
+## Code at a glance
+
+```
+src/
+├── __init__.py
+├── cli/chat.py                   REPL with rich rendering
+├── eval/
+│   ├── metrics.py                per-turn telemetry store
+│   ├── probes.py                 humanness probe runner
+│   └── report.py                 CLI report
+├── identity/uahp_identity.py     Ed25519-spec, HMAC-real UAHP identity
+├── memory/
+│   ├── store.py                  SQLite + FAISS + tier weights
+│   └── extractor.py              Ollama + heuristic fallback
+├── persona/
+│   ├── core.py                   PersonaCore.respond() orchestrator
+│   ├── persona_def.py            YAML config loader
+│   ├── mood.py                   six-axis + circadian + bad-day
+│   ├── prompt_assembler.py       system prompt builder
+│   ├── filters.py                AI-ism/em-dash/slop/hedge/sycophancy scrubbers
+│   └── llm_router.py             Groq/Ollama/Anthropic with backoff
+├── paralinguistics/              M6 scaffolding
+├── turn_taking/                  M8/M9 scaffolding
+└── voice/                        M0/M1/M5 scaffolding
+
+tests/
+├── test_identity.py              4 tests
+├── test_persona_config.py        2 tests
+├── test_mood.py                  5 tests (including bad-day)
+├── test_filters.py               7 tests
+├── test_memory.py                4 tests
+├── test_metrics.py               3 tests
+└── acceptance/
+    ├── run_acceptance.py         live-Groq M2/M3/M4 acceptance (8-10 min)
+    └── last_run.md               latest report (PASS as of 2026-04-16 23:06)
+
+docs/
+├── USAGE.md                      ← start here next session
+└── voice_audition_guide.md
+```
