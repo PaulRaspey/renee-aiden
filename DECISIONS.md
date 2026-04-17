@@ -159,3 +159,17 @@ Append-only. Each decision logged with: date, context, options, choice, rational
       in `.env` (gitignored). Same exfil posture as his `GROQ_API_KEY`.
       `RENEE_VOICE_ID` also lives there so the generator is a single
       `python scripts/generate_reference_corpus.py` invocation.
+
+29. **Library generator always indexes all categories**
+    - First cut of `--only` overwrote `metadata.yaml` with just the selected
+      category's entries. Fixed by always iterating every category: selected
+      ones generate + index, unselected ones harvest existing WAVs via
+      `_harvest_existing` so `--only` can never drop entries from the index.
+      Makes the metadata a pure function of what's on disk.
+
+30. **Accept 47.3 min of paralinguistic audio across 24 × 150 clips**
+    - PJ's floor was 150 per category; hit exactly that. One category
+      (reactions/surprise) needed a backfill because a tag-only prompt
+      (`[surprised gasp]`) kept tripping the empty-text validator. Rewrote
+      to `Oh [surprised gasp].` and backfilled. Metadata rebuild confirms
+      3,600 clips across all 24 subcategories.

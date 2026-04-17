@@ -6,9 +6,10 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4 green. M5 reference corpus + M6 injection engine landed. M6 library generation running (3,600-clip target).
+**Phase:** M0, M2, M3, M4, M5, M6 green. XTTS-v2 model load is the only remaining M5/M6 gap; needs GPU.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
+**Last commit:** `M5 reference corpus + M6 injection engine + library generator`
 **Next milestone:** M7 prosody layer (needs XTTS-v2 on GPU) or M1 ASR
 **Blockers:** None for M5/M6 scaffolding. XTTS-v2 model load needs a CUDA GPU (RunPod H100 spin-up).
 
@@ -46,16 +47,11 @@ Claude Code updates this file at the end of each work session. PJ reads it first
       CUDA shows up. 6 unit tests.
 - [x] `tests/` — 49 unit tests passing.
 
-## What's in progress
-
-- [ ] M6 library generation run: 150 clips × 24 categories = 3,600 clips.
-      Running in background via `state/m6_generate.log`. Resumable: just re-run
-      `python scripts/generate_paralinguistic_library.py --count 150 --seed 42`
-      to pick up. On session resume, check `find paralinguistics/renee -name "*.wav" | wc -l`.
+- [x] **M6: library generated** — 3,600 WAV clips (150 × 24 categories) in
+      `paralinguistics/renee/`. Total ~47.3 min of paralinguistic audio.
+      Metadata at `paralinguistics/renee/metadata.yaml`.
 
 ## What's next (rough order)
-
-- [ ] Finish M6 library run and verify category-level counts
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
 - [ ] M7 prosody control — needs M5 done + XTTS on GPU
 - [ ] M8 turn-taking + endpointer

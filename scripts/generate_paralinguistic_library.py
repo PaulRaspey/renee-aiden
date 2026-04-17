@@ -323,7 +323,7 @@ CATEGORIES: list[CategorySpec] = [
     # --- reactions ---
     CategorySpec(
         category="reactions", subcategory="surprise",
-        prompts=["Oh!", "Oh my god.", "Whoa.", "Wait, what?", "No way.", "[surprised gasp]", "[gasp] Really?"],
+        prompts=["Oh!", "Oh my god.", "Whoa.", "Wait, what?", "No way.", "Oh [surprised gasp].", "[gasp] Really?"],
         emotion="surprised", intensity_range=(0.4, 0.8), energy_range=(0.5, 0.85),
         tags=["reaction", "high_energy"],
         appropriate_contexts=["unexpected_news", "reveal"],
@@ -542,36 +542,69 @@ def main():
     base_dir = REPO_ROOT / "paralinguistics" / args.voice
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    selected = CATEGORIES
-    if args.only:
-        wanted = set(args.only)
-        selected = [s for s in CATEGORIES if s.key() in wanted]
-        missing = wanted - {s.key() for s in selected}
+    wanted: Optional[set[str]] = set(args.only) if args.only else None
+    if wanted:
+        missing = wanted - {s.key() for s in CATEGORIES}
         if missing:
             print(f"Unknown categories: {missing}", file=sys.stderr)
             sys.exit(1)
 
-    print(f"Voice: {args.voice}  |  Clips per category: {args.count}  |  Categories: {len(selected)}")
-    total_clips = args.count * len(selected)
-    print(f"Total clips to ensure: {total_clips}")
+    active = len(CATEGORIES) if wanted is None else len(wanted)
+    print(f"Voice: {args.voice}  |  Clips per category: {args.count}  |  Categories: {active}")
+    print(f"Total clips to ensure (selected): {args.count * active}")
     print()
 
     client = None if args.dry_run else ElClient()
 
+    # Always iterate every category so the metadata always reflects the full
+    # on-disk library. `--only` skips generation for unselected categories
+    # but still harvests their existing clips into metadata.yaml.
     all_records: list[dict] = []
-    for spec in selected:
-        print(f"[{spec.key()}]")
+    for spec in CATEGORIES:
+        selected = wanted is None or spec.key() in wanted
+        print(f"[{spec.key()}]" + ("" if selected else "  (index-only, no generation)"))
         records = generate_category(
             client, voice_id, spec, base_dir,
-            count=args.count, sleep_s=args.sleep, dry_run=args.dry_run,
+            count=args.count if selected else 0,
+            sleep_s=args.sleep,
+            dry_run=args.dry_run or not selected,
         )
+        # When a category is index-only (skipped generation) and the existing
+        # count exceeds --count, still include all on-disk clips in metadata.
+        if not selected:
+            records = _harvest_existing(spec, base_dir)
         all_records.extend(records)
-        _write_metadata(base_dir, args.voice, all_records)  # incremental save
+        _write_metadata(base_dir, args.voice, all_records)
         print(f"  -> {len(records)} records")
         print()
 
     _write_metadata(base_dir, args.voice, all_records)
     print(f"Done. metadata.yaml has {len(all_records)} entries.")
+
+
+def _harvest_existing(spec: CategorySpec, base_dir: Path) -> list[dict]:
+    """Scan the category directory for existing WAVs and build minimal records."""
+    import soundfile as sf
+    cat_dir = base_dir / spec.category / spec.subcategory
+    records: list[dict] = []
+    if not cat_dir.exists():
+        return records
+    for wav in sorted(cat_dir.glob("*.wav")):
+        info = sf.info(str(wav))
+        records.append({
+            "file": wav.relative_to(base_dir).as_posix(),
+            "category": spec.category,
+            "subcategory": spec.subcategory,
+            "emotion": spec.emotion,
+            "intensity": round(sum(spec.intensity_range) / 2, 3),
+            "energy_level": round(sum(spec.energy_range) / 2, 3),
+            "tags": list(spec.tags),
+            "appropriate_contexts": list(spec.appropriate_contexts),
+            "inappropriate_contexts": list(spec.inappropriate_contexts),
+            "duration_ms": int(info.frames / info.samplerate * 1000),
+            "sample_rate": info.samplerate,
+        })
+    return records
 
 
 def _write_metadata(base_dir: Path, voice: str, records: list[dict]) -> None:
