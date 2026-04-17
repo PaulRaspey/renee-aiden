@@ -29,13 +29,11 @@ Thumbs.db
 # State and data (local, not committed)
 state/
 logs/
-voices/renee/*.wav
-voices/renee/*.mp3
-voices/renee/*.npy
-voices/aiden/*.wav
-voices/aiden/*.mp3
-voices/aiden/*.npy
-paralinguistics/*/clips/
+voices/**/*.wav
+voices/**/*.mp3
+voices/**/*.npy
+paralinguistics/**/*.wav
+paralinguistics/**/*.mp3
 *.db
 *.db-journal
 *.sqlite
