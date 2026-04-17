@@ -1,4 +1,11 @@
 """Turn-taking stack. M8 endpointer + latency + interruption; M9 backchannel."""
+from .backchannel import (
+    BackchannelContext,
+    BackchannelEvent,
+    BackchannelLayer,
+    BackchannelToken,
+    BackchannelTrigger,
+)
 from .controller import TickResult, TurnController, TurnState
 from .endpointer import EndpointAction, EndpointDecision, Endpointer
 from .interruption import (
@@ -17,6 +24,11 @@ from .latency import (
 
 __all__ = [
     "BASE_LATENCY_MS",
+    "BackchannelContext",
+    "BackchannelEvent",
+    "BackchannelLayer",
+    "BackchannelToken",
+    "BackchannelTrigger",
     "EndpointAction",
     "EndpointDecision",
     "Endpointer",

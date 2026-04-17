@@ -6,12 +6,12 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6, M7, M8 green. XTTS-v2 model load still needs GPU for audio rendering.
+**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9 green. XTTS-v2 model load still needs GPU for audio rendering.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M8 turn-taking: heuristic endpointer + latency controller + interruption handler + controller`
-**Next milestone:** M9 backchannel layer
-**Blockers:** None for M7/M8 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring for the endpointer + interruption inputs.
+**Last commit:** `M9 backchannel layer: clause/question/emotional/intimate triggers; hard-blocked during disagreement, distress, heated`
+**Next milestone:** M10 integration orchestrator
+**Blockers:** None for M7-M9 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
 
 ## How to resume
 
@@ -80,10 +80,19 @@ Claude Code updates this file at the end of each work session. PJ reads it first
       * `controller.py` `TurnController` wiring the three with a state
         machine (idle / user_speaking / renee_preparing / renee_speaking).
       38 unit tests pass.
+- [x] **M9: backchannel layer** — `src/turn_taking/backchannel.py`.
+      Parallel-to-user listener. Triggers: clause boundary (comma/semicolon/
+      dash or connective-ending + 120-500ms pause), confirmation seeking
+      (question mark or rising intonation), emotional content (marker
+      words), intimate moment (low energy + quiet). Hard-blocked during
+      disagreement, user distress, or heated tone. Rate scales with
+      mood.warmth and conversation intimacy. Tokens selected from
+      affirmations/thinking categories via the M6 ClipLibrary; emitted
+      at -6dB. Min 1.8s between fires (configurable), max 8/minute
+      (configurable). Deterministic given RNG seed. 25 unit tests pass.
 
 ## What's next (rough order)
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
-- [ ] M9 backchannel
 - [ ] M10 end-to-end voice integration
 - [ ] M11 full eval harness w/ dashboard
 - [ ] M12 *Her* script analysis
