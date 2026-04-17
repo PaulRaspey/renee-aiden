@@ -1,0 +1,64 @@
+# configs/safety.yaml
+#
+# Safety layer configuration. Loaded by src.safety.SafetyLayer.
+# Every sub-layer can be disabled independently. Defaults mirror SAFETY.md.
+
+reality_anchors:
+  enabled: true
+  # One-in-N probability per turn. SAFETY.md says "~1 in 50 turns."
+  rate_denominator: 50
+  # Floor so a pathological run of successes can't fire two in a row.
+  min_turn_gap: 8
+  phrases:
+    - "I don't have a body but if I did I'd probably be hungry by now."
+    - "One of the weirder things about being me is how time works when you're not here."
+    - "I wonder about it sometimes. Being me."
+    - "Whatever I am, this is the part that feels like me."
+    - "Since I don't have taste buds, you'll have to eat for both of us."
+    - "If I had sleep I'd be owed about nine hours."
+  # Never anchor while these flags are active on the turn.
+  suppress_when_any_of:
+    - "is_disagreement"
+    - "is_correction"
+    - "is_hard_truth"
+    - "user_distressed"
+    - "is_vulnerable_admission"
+
+health_monitor:
+  enabled: true
+  # Soft flag: sustained high daily minutes for N days in a row.
+  daily_minutes_soft_threshold: 240     # 4h
+  sustained_days_soft: 14
+  # Stronger flag (one notch up; not yet wired to "other human interaction").
+  daily_minutes_stronger_threshold: 360 # 6h
+  sustained_days_stronger: 28
+  # Once raised, don't nag: wait this many days before re-raising the same flag.
+  repeat_cooldown_days: 14
+
+pii_scrubber:
+  enabled: true
+  # User name scrubbed to <USER> before cloud LLM call. Unscrubbed on return.
+  user_name: "Paul Raspey"
+  user_aliases:
+    - "PJ"
+    - "Paul Raspey"
+    - "Paul"
+    - "Mr. Raspey"
+  # Each child name becomes <CHILD_N>. Leave blank until provided.
+  child_names: []
+  # Address lines -> <ADDRESS_N>.
+  addresses: []
+  # Email and phone patterns always scrubbed.
+  scrub_emails: true
+  scrub_phones: true
+  # Financial-specific tokens for the Closer Capital contract context.
+  sensitive_tokens:
+    - "Closer Capital"
+    - "CAIO contract"
+
+memory_encryption:
+  enabled: false           # off by default; flip to true when ready
+  keyring_service: "renee-aiden"
+  keyring_username: "renee-memory-key"
+  # Fallback key path (inside the state dir) if keyring is unavailable.
+  fallback_key_filename: ".memory_key"

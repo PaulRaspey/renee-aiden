@@ -28,6 +28,11 @@ from .persona_def import PersonaDef, load_persona
 from .prompt_assembler import build_system_prompt
 from .style_rules import StyleReference, load_style_reference
 
+try:  # Safety layer is optional — tests construct PersonaCore without it.
+    from ..safety import SafetyLayer
+except Exception:  # pragma: no cover
+    SafetyLayer = None  # type: ignore
+
 
 @dataclass
 class TurnResult:
@@ -74,6 +79,7 @@ class PersonaCore:
         state_dir: str | Path = "state",
         router: LLMRouter | None = None,
         memory_store=None,  # duck-typed, imported lazily
+        safety_layer=None,  # Optional[SafetyLayer]
     ):
         self.persona_name = persona_name.lower()
         config_path = Path(config_dir) / f"{self.persona_name}.yaml"
@@ -94,6 +100,7 @@ class PersonaCore:
         self.metrics = MetricsStore(self.state_dir)
         style_ref_path = Path(config_dir) / "style_reference.yaml"
         self.style_reference: StyleReference | None = load_style_reference(style_ref_path)
+        self.safety_layer = safety_layer
 
     # ------------------------------------------------------------------
     # Public API
@@ -127,48 +134,87 @@ class PersonaCore:
             core_facts=core_facts,
             style_reference=self.style_reference,
         )
-        messages = history + [{"role": "user", "content": user_text}]
+        # PII scrub on the user-facing text + message history + core facts
+        # before handing anything to a cloud LLM. Mapping is unscrubbed on
+        # the response path so the user sees real names again.
+        scrub_mapping: dict[str, str] = {}
+        llm_user_text = user_text
+        llm_messages_source = history + [{"role": "user", "content": user_text}]
+        llm_system = system_prompt
+        if self.safety_layer is not None:
+            u = self.safety_layer.pre_llm(user_text)
+            llm_user_text = u.text
+            scrub_mapping.update(u.mapping)
+            llm_messages_source = []
+            for m in history:
+                content = m.get("content", "")
+                sr = self.safety_layer.pre_llm(content)
+                llm_messages_source.append({**m, "content": sr.text})
+                scrub_mapping.update(sr.mapping)
+            llm_messages_source.append({"role": "user", "content": llm_user_text})
+            sys_sr = self.safety_layer.pre_llm(system_prompt)
+            llm_system = sys_sr.text
+            scrub_mapping.update(sys_sr.mapping)
+
+        messages = llm_messages_source
 
         # 4. LLM call (with one regen if filters flag)
         chosen_backend = backend or self.router.decide_backend(user_text)
         llm_resp = self.router.generate(
-            system_prompt=system_prompt,
+            system_prompt=llm_system,
             messages=messages,
             backend=chosen_backend,
-            user_text=user_text,
+            user_text=llm_user_text,
         )
+        if scrub_mapping and self.safety_layer is not None:
+            # Unscrub tokens in the LLM output so filters + memory see real refs.
+            llm_resp.text = self.safety_layer.unscrub(llm_resp.text, scrub_mapping)
         report = self.filters.apply(llm_resp.text)
 
         regen_fired = False
         if report.regenerate_hint:
             # one retry with a system-level correction note
-            retry_system = system_prompt + f"\n\nREGEN NOTE: prior attempt flagged ({report.regenerate_hint}). Fix it. Keep the voice."
+            retry_system = llm_system + f"\n\nREGEN NOTE: prior attempt flagged ({report.regenerate_hint}). Fix it. Keep the voice."
             llm_resp2 = self.router.generate(
                 system_prompt=retry_system,
                 messages=messages,
                 backend=chosen_backend,
-                user_text=user_text,
+                user_text=llm_user_text,
                 temperature=0.9,
             )
+            if scrub_mapping and self.safety_layer is not None:
+                llm_resp2.text = self.safety_layer.unscrub(llm_resp2.text, scrub_mapping)
             report2 = self.filters.apply(llm_resp2.text)
             if len(report2.hits) <= len(report.hits):
                 llm_resp = llm_resp2
                 report = report2
                 regen_fired = True
 
-        # 5. mood update based on user tone
+        # 5. reality-anchor injection (soft, ~1 in 50 turns; suppressed on
+        # load-bearing emotional beats). Flags inferred from the same signals
+        # the orchestrator classifier uses; at this layer we approximate
+        # since the orchestrator is upstream.
+        if self.safety_layer is not None:
+            anchor_res = self.safety_layer.maybe_anchor(report.text, ctx_flags=None)
+            if anchor_res.injected:
+                report.text = anchor_res.text
+                report.hits.append(f"anchor:{anchor_res.phrase[:24]}")
+
+        # 6. mood update based on user tone
         tone = _infer_user_tone(user_text)
         new_mood = self.mood_store.apply_tone(mood, tone)
 
-        # 6. memory write
+        # 7. memory write
         if self.memory_store is not None:
             try:
                 self.memory_store.write_turn(user_text=user_text, assistant_text=report.text, mood=new_mood)
             except Exception:
                 pass
 
-        # 7. UAHP completion receipt
+        # 8. UAHP completion receipt
         duration_ms = (time.time() - t0) * 1000
+        if self.safety_layer is not None:
+            self.safety_layer.record_turn_duration(duration_ms)
         receipt = sign_receipt(
             self.identity,
             task_id=f"turn-{int(time.time()*1000)}",
