@@ -6,12 +6,14 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9, M10 green. XTTS-v2 model load still needs GPU for audio rendering.
+**Phase:** M0, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11 green. XTTS-v2 model load still needs GPU for audio rendering.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M10 orchestrator: persona + mood + memory + prosody + paralinguistics + turn-taking wired; per-layer telemetry`
-**Next milestone:** M11 eval harness
-**Blockers:** None for M7-M10 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
+**Last commit:** `M11 eval harness: scorers + A/B queue + callback tracker + style extractor + dashboard`
+**Next milestone:** M12 *Her* script analysis (or M1 ASR on audio install, or M13 safety layer)
+**Blockers:** None for M7-M11 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring.
+
+**Test summary:** 214 tests passing across M0, M2-M11. 4 pre-existing memory tests fail on HuggingFace network access only.
 
 ## How to resume
 
@@ -101,9 +103,35 @@ Claude Code updates this file at the end of each work session. PJ reads it first
       interruptions. Telemetry written as JSONL at
       `state/orchestrator.jsonl` per turn. Graceful fallback when the
       paralinguistic library isn't on disk. 18 unit tests pass.
+- [x] **M11: eval harness** — `src/eval/`:
+      * `scorers.py` — eight humanness axes: hedge_rate,
+        sycophancy_flag, ai_ism_count, response_length, callback_hit,
+        emotional_congruence, pushback, opinion_consistency. All
+        stateless; `score_turn()` returns a `TurnScores` bundle.
+      * `ab.py` — blind A/B queue, SQLite-backed. `queue_pair` random-
+        swaps candidate/baseline. `record_rating`, `win_rate`,
+        `pending_count`.
+      * `callbacks.py` — accuracy tracker; logs opportunities + hits,
+        reports rolling accuracy.
+      * `style_extractor.py` — parses `scripts/renee_reference_script.md`
+        (original work, not copyrighted) and emits
+        `configs/style_reference.yaml` with turn-length stats, hedge
+        rate, paralinguistic density, pause markers, register markers,
+        false-start rate, silent-response count. 185 turns parsed.
+      * `harness.py` — `EvalHarness.run_probes` runs probes through
+        the orchestrator, applies the scorer stack, persists to
+        `state/eval.db`, returns a `HarnessReport` with aggregate.
+        CLI at `python -m src.eval.harness`.
+      * `dashboard.py` — single-file HTML dashboard pulling from eval.db,
+        orchestrator.jsonl, callbacks.db, ab.db, metrics.db.
+      46 unit tests pass.
 
 ## What's next (rough order)
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
+- [ ] M12 *Her* script analysis — style_extractor already runs on the
+      original reference script; M12 expands the pattern set and feeds
+      them into the persona prompt as style constraints.
+- [ ] M13 safety layer (PII scrubber, relationship-health monitor)
 - [ ] M10 end-to-end voice integration
 - [ ] M11 full eval harness w/ dashboard
 - [ ] M12 *Her* script analysis
