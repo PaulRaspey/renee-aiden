@@ -46,7 +46,7 @@ CORE_FACTS_PJ = [
 def _print_banner(console: Console, persona: str):
     name = "Renée" if persona == "renee" else "Aiden"
     console.print(Panel.fit(
-        Text.from_markup(f"[bold]{name}[/bold] — voice-first companion, text mode.\nCommands: /mood /memories /retrieve /receipt /quit"),
+        Text.from_markup(f"[bold]{name}[/bold] — voice-first companion, text mode.\nCommands: /mood /memories /retrieve /receipt /stats /save /quit"),
         border_style="magenta" if persona == "renee" else "cyan",
     ))
 
@@ -92,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
 
     history: list[dict] = []
     last_result = None
+    import time as _time
+    session_start = _time.time()
 
     while True:
         try:
@@ -152,6 +154,36 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 title="UAHP receipt",
             ))
+            continue
+        if user_text == "/stats":
+            summary = core.metrics.session_summary(persona=args.persona, since_ts=session_start)
+            if summary.get("turns", 0) == 0:
+                console.print("[dim]no turns this session yet[/dim]")
+                continue
+            lines = [
+                f"turns         {summary['turns']}",
+                f"latency p50   {summary['latency_ms_p50']:.0f}ms",
+                f"latency p95   {summary['latency_ms_p95']:.0f}ms",
+                f"latency mean  {summary['latency_ms_mean']:.0f}ms",
+                f"backends      {summary['backends']}",
+                f"filter hits   {summary['filter_hits_total']} ({summary['filter_hits_per_turn']:.2f}/turn)",
+                f"sycophancy    {summary['sycophancy_hits']}",
+                f"retrieved avg {summary['retrieved_avg']:.1f}/turn",
+                f"tokens        in={summary['input_tokens_total']} out={summary['output_tokens_total']}",
+            ]
+            console.print(Panel.fit("\n".join(lines), title="session stats"))
+            continue
+        if user_text == "/save":
+            import json as _json
+            sessions_dir = Path(args.state_dir) / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            dest = sessions_dir / f"{args.persona}_{int(session_start)}.json"
+            dest.write_text(_json.dumps({
+                "persona": args.persona,
+                "started": session_start,
+                "history": history,
+            }, indent=2), encoding="utf-8")
+            console.print(f"[dim]saved session to {dest}[/dim]")
             continue
 
         try:

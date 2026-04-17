@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..eval.metrics import MetricsStore, TurnMetric
 from ..identity import ReneeIdentityManager, sign_receipt, CompletionReceipt
 from .filters import OutputFilters, FilterReport
 from .llm_router import LLMResponse, LLMRouter
@@ -89,6 +90,7 @@ class PersonaCore:
         self.filters = OutputFilters(self.persona)
         self.router = router or LLMRouter()
         self.memory_store = memory_store  # may be None in pure M2 mode
+        self.metrics = MetricsStore(self.state_dir)
 
     # ------------------------------------------------------------------
     # Public API
@@ -133,6 +135,7 @@ class PersonaCore:
         )
         report = self.filters.apply(llm_resp.text)
 
+        regen_fired = False
         if report.regenerate_hint:
             # one retry with a system-level correction note
             retry_system = system_prompt + f"\n\nREGEN NOTE: prior attempt flagged ({report.regenerate_hint}). Fix it. Keep the voice."
@@ -147,6 +150,7 @@ class PersonaCore:
             if len(report2.hits) <= len(report.hits):
                 llm_resp = llm_resp2
                 report = report2
+                regen_fired = True
 
         # 5. mood update based on user tone
         tone = _infer_user_tone(user_text)
@@ -171,6 +175,29 @@ class PersonaCore:
             output_data={"text": report.text, "mood_after": vars(new_mood), "backend": llm_resp.backend},
             metadata={"latency_ms_llm": llm_resp.latency_ms, "hits": report.hits},
         )
+
+        # 8. record telemetry for the eval harness
+        try:
+            import json as _json
+            self.metrics.record_turn(TurnMetric(
+                ts=time.time(),
+                persona=self.persona_name,
+                backend=llm_resp.backend,
+                model=llm_resp.model,
+                latency_ms=duration_ms,
+                input_tokens=llm_resp.input_tokens,
+                output_tokens=llm_resp.output_tokens,
+                filter_hits=list(report.hits),
+                regen=regen_fired,
+                sycophancy_flag=report.sycophancy_flag,
+                retrieved_count=len(retrieved),
+                user_chars=len(user_text),
+                response_chars=len(report.text),
+                mood_json=_json.dumps(vars(new_mood)),
+                receipt_id=receipt.receipt_id,
+            ))
+        except Exception:
+            pass  # telemetry must never break a turn
 
         return TurnResult(
             text=report.text,
