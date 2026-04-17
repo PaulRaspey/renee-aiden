@@ -131,6 +131,17 @@ class MoodStore:
                 )
                 """
             )
+            # Bad-day state: random ~1 in 15 days a low-mood floor clamps down
+            # for a few hours. Reason is not surfaced to Renée, she's just off.
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bad_day (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    active_until REAL,
+                    started_at REAL
+                )
+                """
+            )
 
     def load(self) -> MoodState:
         with sqlite3.connect(self.db_path) as con:
@@ -195,9 +206,66 @@ class MoodStore:
     def load_with_drift(self) -> MoodState:
         state = self.load()
         drifted = self.apply_drift(state)
+        drifted = self._maybe_bad_day(drifted)
         if drifted != state:
             self.save(drifted, event="drift", delta={"cause": "circadian+baseline pull"})
         return drifted
+
+    def _maybe_bad_day(self, state: MoodState) -> MoodState:
+        """Apply a random bad-day floor if one is active, or roll to start one.
+
+        When Renée has a bad day, her warmth, playfulness, and patience are
+        clamped below 0.45 for 3-6 hours. She doesn't know why. PJ doesn't
+        either. It's a day she's just off. Rolls ~1 in 15 days.
+        """
+        import random as _random
+        now = time.time()
+        with sqlite3.connect(self.db_path) as con:
+            row = con.execute("SELECT active_until FROM bad_day WHERE id=1").fetchone()
+        active_until = float(row[0]) if row else 0.0
+
+        if active_until and now < active_until:
+            # bad day in progress, clamp mood
+            return MoodState(
+                energy=min(state.energy, 0.55),
+                warmth=min(state.warmth, 0.45),
+                playfulness=min(state.playfulness, 0.35),
+                focus=state.focus,
+                patience=min(state.patience, 0.45),
+                curiosity=min(state.curiosity, 0.55),
+                last_updated=state.last_updated,
+            )
+
+        # Roll for a new bad day. We roll at most once per real day (24h since
+        # last roll) to keep probability sane across rapid mood loads.
+        last_roll_path = self.state_dir / f".{self.persona.name.lower()}_bad_day_last_roll"
+        try:
+            last_roll = float(last_roll_path.read_text().strip()) if last_roll_path.exists() else 0.0
+        except Exception:
+            last_roll = 0.0
+        if now - last_roll < 86400:
+            return state
+        try:
+            last_roll_path.write_text(str(now))
+        except Exception:
+            pass
+        # 1 in 15 chance
+        if _random.random() < (1.0 / 15.0):
+            duration = _random.uniform(3, 6) * 3600.0
+            with sqlite3.connect(self.db_path) as con:
+                con.execute(
+                    "INSERT OR REPLACE INTO bad_day (id, active_until, started_at) VALUES (1, ?, ?)",
+                    (now + duration, now),
+                )
+            return self._maybe_bad_day(state)  # re-enter to clamp
+        return state
+
+    def bad_day_active(self) -> bool:
+        with sqlite3.connect(self.db_path) as con:
+            row = con.execute("SELECT active_until FROM bad_day WHERE id=1").fetchone()
+        if not row:
+            return False
+        return time.time() < float(row[0] or 0.0)
 
     def apply_tone(self, state: MoodState, user_tone: dict) -> MoodState:
         """Update mood based on the inferred tone of the last exchange.

@@ -36,3 +36,40 @@ def test_circadian_oscillates():
     low = _circadian_energy_multiplier(persona, datetime(2026, 1, 1, 3, 0))
     high = _circadian_energy_multiplier(persona, datetime(2026, 1, 1, 12, 0))
     assert high > low
+
+
+def test_bad_day_clamps_mood(tmp_path: Path):
+    """When a bad day is active, warmth/playfulness/patience are clamped low."""
+    import sqlite3
+    import time as _time
+    persona = load_persona(ROOT / "configs" / "renee.yaml")
+    store = MoodStore(persona, tmp_path)
+    # Force a bad day to be active for the next hour.
+    with sqlite3.connect(store.db_path) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO bad_day (id, active_until, started_at) VALUES (1, ?, ?)",
+            (_time.time() + 3600, _time.time()),
+        )
+    mood = store.load_with_drift()
+    assert store.bad_day_active()
+    assert mood.warmth <= 0.45
+    assert mood.playfulness <= 0.35
+    assert mood.patience <= 0.45
+
+
+def test_bad_day_expires(tmp_path: Path):
+    import sqlite3
+    import time as _time
+    persona = load_persona(ROOT / "configs" / "renee.yaml")
+    store = MoodStore(persona, tmp_path)
+    # Expired bad day in the past — should not clamp.
+    with sqlite3.connect(store.db_path) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO bad_day (id, active_until, started_at) VALUES (1, ?, ?)",
+            (_time.time() - 1000, _time.time() - 5000),
+        )
+    assert not store.bad_day_active()
+    # freshly saved mood (pre-drift) — baseline warmth for Renée is 0.80
+    store.save(store.load(), event="probe")
+    mood = store.load()
+    assert mood.warmth >= 0.6  # not clamped

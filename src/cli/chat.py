@@ -108,11 +108,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if user_text == "/mood":
             mood = core.mood_store.load_with_drift()
+            bad_day_suffix = "  [red](bad day)[/red]" if core.mood_store.bad_day_active() else ""
             console.print(Panel.fit(
                 Text.from_markup(
                     f"energy {mood.energy:.2f}  warmth {mood.warmth:.2f}  playfulness {mood.playfulness:.2f}\n"
                     f"focus {mood.focus:.2f}  patience {mood.patience:.2f}  curiosity {mood.curiosity:.2f}\n\n"
-                    f"[italic]{mood.summary()}[/italic]"
+                    f"[italic]{mood.summary()}[/italic]{bad_day_suffix}"
                 ),
                 title="mood",
             ))
@@ -184,6 +185,27 @@ def main(argv: list[str] | None = None) -> int:
                 "history": history,
             }, indent=2), encoding="utf-8")
             console.print(f"[dim]saved session to {dest}[/dim]")
+            continue
+        if user_text == "/load":
+            import json as _json
+            sessions_dir = Path(args.state_dir) / "sessions"
+            if not sessions_dir.exists():
+                console.print("[yellow]no saved sessions[/yellow]")
+                continue
+            files = sorted(sessions_dir.glob(f"{args.persona}_*.json"), reverse=True)
+            if not files:
+                console.print(f"[yellow]no saved sessions for {args.persona}[/yellow]")
+                continue
+            latest = files[0]
+            data = _json.loads(latest.read_text(encoding="utf-8"))
+            history = list(data.get("history", []))
+            console.print(f"[dim]loaded {latest.name} ({len(history)//2} turns)[/dim]")
+            continue
+        if user_text == "/baddayreset":
+            import sqlite3 as _sq
+            with _sq.connect(core.mood_store.db_path) as con:
+                con.execute("DELETE FROM bad_day WHERE id=1")
+            console.print("[dim]bad-day state cleared[/dim]")
             continue
 
         try:
