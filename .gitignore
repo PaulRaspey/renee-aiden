@@ -1,0 +1,62 @@
+# Virtualenv
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.bridge_key
+
+# State and data (local, not committed)
+state/
+logs/
+voices/renee/*.wav
+voices/renee/*.mp3
+voices/renee/*.npy
+voices/aiden/*.wav
+voices/aiden/*.mp3
+voices/aiden/*.npy
+paralinguistics/*/clips/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Model caches
+models/
+.cache/
+huggingface/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+desktop.ini
+
+# Secrets
+*.pem
+*.key
+!voices/*/README.key

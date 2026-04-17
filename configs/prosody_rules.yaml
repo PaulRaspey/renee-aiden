@@ -1,0 +1,55 @@
+# Prosody rules — translates mood + context into TTS markup
+
+global:
+  default_rate: 1.0
+  default_pitch: 0.0
+
+rate_modulation:
+  energy_floor: 0.85          # tired max slow-down
+  energy_ceiling: 1.15        # excited max speed-up
+  serious_modifier: 0.93      # serious topics slow down
+  playful_modifier: 1.06      # playful topics speed up
+
+pause_rules:
+  comma_ms: 150
+  period_ms_base: 400
+  period_ms_by_mood:
+    low_energy: 550
+    high_energy: 280
+    thoughtful: 500
+  dramatic_before_emotional: 1200
+  dramatic_before_callback: 300
+  thinking_mid_turn: 600
+
+pitch_contour:
+  question_rise: +0.15
+  statement_fall: -0.08
+  confident_flat: 0.0
+  vulnerable_soft: -0.12
+  callback_lift: +0.05
+
+vocal_effects:
+  creak_on_low_energy: true       # slight vocal fry on mood.energy < 0.4
+  breathiness_on_intimate: true   # on vulnerability > 0.7
+  reduce_all_effects_if_distressed: true
+
+paralinguistic_density:
+  casual: 0.4    # per turn
+  playful: 0.8
+  serious: 0.1
+  vulnerable: 0.5
+  heated: 0.0    # none during arguments
+
+breath_rules:
+  sharp_in_before_vulnerable: true
+  slow_out_on_acceptance: true
+  thinking_in_before_complex: 0.3  # probability
+
+constraints:
+  max_paralinguistics_per_turn: 2
+  min_time_between_same_category: 120  # seconds
+  no_paralinguistics_during:
+    - disagreement
+    - correction
+    - hard_truth_delivery
+    - user_distress
