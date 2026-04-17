@@ -6,12 +6,12 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2, M3, M4, M5, M6, M7 green. XTTS-v2 model load still needs GPU for audio rendering.
+**Phase:** M0, M2, M3, M4, M5, M6, M7, M8 green. XTTS-v2 model load still needs GPU for audio rendering.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M7 prosody: rate/pause/pitch/effects + SSML + vulnerable-admission hard rule`
-**Next milestone:** M8 turn-taking and endpointing
-**Blockers:** None for M7 text-mode. XTTS-v2 model load still needs a CUDA GPU (RunPod H100 spin-up) for audio.
+**Last commit:** `M8 turn-taking: heuristic endpointer + latency controller + interruption handler + controller`
+**Next milestone:** M9 backchannel layer
+**Blockers:** None for M7/M8 text-mode. Live audio still needs a CUDA GPU for XTTS-v2 and live-mic wiring for the endpointer + interruption inputs.
 
 ## How to resume
 
@@ -60,10 +60,29 @@ Claude Code updates this file at the end of each work session. PJ reads it first
       max-per-turn cap. Merges M6 injector output via
       `Injection.position`. SSML-like serialization via `plan.to_ssml()`.
       42 unit tests pass.
+- [x] **M8: turn-taking** — `src/turn_taking/`:
+      * `endpointer.py` heuristic predictive endpointer. Runs per ~100ms
+        audio tick; returns `EndpointDecision` with action in
+        {idle, prewarm, speculative, commit}. Thresholds from architecture:
+        p>0.5 prewarm, p>0.7 speculative, p>0.9 for 150ms commit. Silence
+        piecewise ramp + transcript completeness (terminal punct, comma,
+        continuation words, fillers, short-transcript penalty).
+      * `latency.py` response-latency controller. `TurnType` enum +
+        `classify_turn` + `target_latency_ms` + `plan_latency`. Base
+        latencies (150/300/500/900/1200/1500 ms), mood modulation
+        (tired slower, playful faster, scattered slower, low-patience
+        snappier), gaussian jitter clamped to [0.75, 1.30].
+        `include_thinking_filler` flag fires above 600ms.
+      * `interruption.py` two-way handler. User interrupts Renée on
+        sustained voice energy (default 100ms above threshold); Renée
+        interrupts user on strong disagreement / correction / excitement
+        / callback urgency, capped at 1 per rolling N turns.
+      * `controller.py` `TurnController` wiring the three with a state
+        machine (idle / user_speaking / renee_preparing / renee_speaking).
+      38 unit tests pass.
 
 ## What's next (rough order)
 - [ ] M1 ASR — needs faster-whisper; install audio deps when voice comes back
-- [ ] M8 turn-taking + endpointer
 - [ ] M9 backchannel
 - [ ] M10 end-to-end voice integration
 - [ ] M11 full eval harness w/ dashboard
