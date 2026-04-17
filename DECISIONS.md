@@ -49,3 +49,44 @@ Append-only. Each decision logged with: date, context, options, choice, rational
 10. **Separate evaluation harness from production system**
     - Options: Inline eval, separate harness, none
     - Chose separate. Nightly runs. Metrics trend over time. Regression detection.
+
+---
+
+## 2026-04-16 — Implementation session (M0 through M4)
+
+**Context:** Claude Code session picking up after handoff. PJ asked to skip the M0 audio I/O round-trip and focus on the text conversation loop through M4. Environment: Windows 11 CMD, Python 3.12.10, venv at `.venv`, Groq key at `~/.bridge_key`, dual T400 GPUs (4GB each), Ollama v0.20.4 with gemma3:4b available.
+
+**Decisions:**
+
+11. **Drop the broken PyPI `uahp` package, re-implement identity primitives in-repo**
+    - The `uahp==0.5.4` wheel imports `.identity`, `.capability`, `.intent`, `.session`, `.verification`, `.canon`, `.enums`, `.schemas` at init time — none of those modules ship in the wheel, so `import uahp` raises `ModuleNotFoundError`.
+    - Options: pin older version (none available), vendor from PJ's `uahp-stack/` repo, implement locally.
+    - Chose to implement `src/identity/uahp_identity.py` directly from the pattern in PJ's `uahp-stack/core.py`. HMAC-SHA256 signing, SHA-256 public hash, keyed by `agent_id`. Keeps the Renée repo standalone. Full agent handshake, liveness, and death-certificate flow can be added when voice orchestration needs them in M8-M10.
+    - If the PyPI wheel is fixed later, swap the implementation without touching the public API (`sign_receipt`, `verify_receipt`, `ReneeIdentityManager.get`).
+
+12. **Python 3.12 instead of 3.11**
+    - The handoff doc asked for 3.11, the environment is 3.12.10. All deps (uahp, faiss-cpu, sentence-transformers, groq, ollama) install cleanly on 3.12. Kept 3.12. Will revisit if a cloud/production pod requires 3.11.
+
+13. **Skip the audio subsystem packages for this session**
+    - PJ asked to focus on text. `sounddevice`, `soundfile`, `webrtcvad`, `opuslib`, `librosa`, `pyloudnorm`, `faster-whisper`, `TTS` (Coqui) were NOT installed this session. Only core deps for M0-M4 were installed. Added to the pip install list in the next session that touches M1/M5.
+
+14. **Keep the BOM-tolerant bridge-key parser**
+    - The `~/.bridge_key` file on this machine has a UTF-8 BOM (`\xef\xbb\xbf`) from Notepad. Added `utf-8-sig` decoding + ASCII-safe header sanitation in `LLMRouter._read_bridge_key` so Windows-edited key files work without hand-stripping.
+
+15. **`qwen/qwen3-32b` with `reasoning_effort="none"`**
+    - Qwen 3 leaks internal `<think>...</think>` blocks by default on Groq. Passing `reasoning_effort="none"` keeps the voice. The filter also strips `<think>` blocks defensively.
+
+16. **Default fast-backend model is `gemma3:4b`, not `gemma2:2b`**
+    - PJ's environment has gemma3:4b loaded in Ollama. Overrides via `OLLAMA_MODEL` env var; the bootstrap script still pulls `gemma2:2b` as a minimal fallback.
+
+17. **Windows `src/{a,b,c}` directory was a CMD brace-expansion artifact**
+    - The previous session ran `mkdir src/{voice,persona,...}` on Windows CMD which doesn't expand braces, creating a single literal directory. Removed and recreated the six subdirs plus `src/identity` and `src/cli`.
+
+18. **`configs/renee.yaml` had an unquoted colon inside a list item ("Reality anchors allowed: ...")**
+    - YAML parser was treating the colon as a mapping key. Wrapped that one line in single quotes. No semantic change.
+
+19. **Core facts kept in `src/cli/chat.py` rather than a yaml**
+    - For M2/M3, the CORE-tier seed facts about PJ are a Python list in the CLI, injected both into the system prompt and seeded into the memory store on first run. Move to `configs/pj_facts.yaml` when we support multiple subject identities.
+
+20. **Sensitive-tier memories are hard-filtered, not just zero-weighted**
+    - Previously scored 0.0 on tier weight but could still reach top-k via the salience floor. Now they're explicitly dropped unless `user_raised_sensitive=True`. Matches the design intent in `architecture/03_memory.md`: "She knows. She won't raise them."
