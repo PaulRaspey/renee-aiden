@@ -1,5 +1,5 @@
 """Smoke tests for the audio bridge modules — they must import cleanly
-without `websockets`, `opuslib`, or `sounddevice` installed."""
+without `websockets` or `sounddevice` installed."""
 from __future__ import annotations
 
 import pytest
@@ -17,13 +17,10 @@ class FakeOrchestrator:
             yield b""
 
 
-def test_cloud_bridge_constructs_without_codecs():
-    # Construction must not touch opus.
+def test_cloud_bridge_constructs_cleanly():
     bridge = CloudAudioBridge(FakeOrchestrator())
     assert bridge.sample_rate == 48000
     assert bridge.frame_size == 960
-    assert bridge._decoder is None
-    assert bridge._encoder is None
 
 
 def test_client_bridge_rejects_non_ws_url():

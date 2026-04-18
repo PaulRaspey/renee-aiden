@@ -163,7 +163,6 @@ def cmd_export(args) -> int:
 def cmd_check_deps(args) -> int:
     deps = [
         ("websockets", "pip install websockets"),
-        ("opuslib", "pip install opuslib"),
         ("sounddevice", "pip install sounddevice"),
         ("runpod", "pip install runpod"),
     ]

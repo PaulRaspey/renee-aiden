@@ -1,13 +1,14 @@
 """
 OptiPlex-side audio bridge (M14).
 
-Captures mic audio via sounddevice, opus-encodes, streams over WebSocket
-to the cloud pod. In the other direction, receives opus frames, decodes,
-plays through the default output.
+Captures mic audio via sounddevice and streams raw int16 PCM frames
+over WebSocket to the cloud pod. In the other direction, receives PCM
+frames and plays through the default output. No codec on the wire for
+M15 burn-in — Opus layers in later on the RunPod side without changing
+this file's behavior.
 
-All heavy deps (`sounddevice`, `opuslib`, `websockets`) are imported
-lazily so this module imports fine on a Python install that doesn't have
-them yet (e.g. PJ's current dev box pre-M14).
+`sounddevice` and `websockets` are imported lazily so this module
+imports on a Python install that doesn't have them yet.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from typing import Optional
 
 SAMPLE_RATE = 48000
 CHANNELS = 1
-FRAME_SIZE = 960   # 20ms at 48kHz
+FRAME_SIZE = 960   # 20ms at 48kHz (1920 bytes of int16 PCM per frame)
 
 
 logger = logging.getLogger("renee.client.audio_bridge")
@@ -27,8 +28,7 @@ logger = logging.getLogger("renee.client.audio_bridge")
 def _lazy_imports():
     import sounddevice     # noqa: F401
     import websockets      # noqa: F401
-    import opuslib         # noqa: F401
-    return sounddevice, websockets, opuslib
+    return sounddevice, websockets
 
 
 class ClientAudioBridge:
@@ -55,16 +55,14 @@ class ClientAudioBridge:
     # -------------------- run --------------------
 
     async def run(self) -> None:
-        sd, websockets, opuslib = _lazy_imports()
-        encoder = opuslib.Encoder(self.sample_rate, self.channels, opuslib.APPLICATION_VOIP)
-        decoder = opuslib.Decoder(self.sample_rate, self.channels)
+        sd, websockets = _lazy_imports()
 
         async with websockets.connect(self.server_url) as ws:
             self._running = True
-            logger.info("connected to %s", self.server_url)
+            logger.info("connected to %s (raw PCM)", self.server_url)
             await asyncio.gather(
-                self._send_mic(ws, sd, encoder),
-                self._receive_speaker(ws, sd, decoder),
+                self._send_mic(ws, sd),
+                self._receive_speaker(ws, sd),
             )
 
     def stop(self) -> None:
@@ -72,7 +70,7 @@ class ClientAudioBridge:
 
     # -------------------- mic -> cloud --------------------
 
-    async def _send_mic(self, ws, sd, encoder) -> None:
+    async def _send_mic(self, ws, sd) -> None:
         stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=self.channels,
@@ -84,15 +82,14 @@ class ClientAudioBridge:
         try:
             while self._running:
                 audio, _ = stream.read(self.frame_size)
-                frame = encoder.encode(audio.tobytes(), self.frame_size)
-                await ws.send(frame)
+                await ws.send(audio.tobytes())
         finally:
             stream.stop()
             stream.close()
 
     # -------------------- cloud -> speaker --------------------
 
-    async def _receive_speaker(self, ws, sd, decoder) -> None:
+    async def _receive_speaker(self, ws, sd) -> None:
         stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=self.channels,
@@ -104,12 +101,7 @@ class ClientAudioBridge:
             async for message in ws:
                 if not isinstance(message, (bytes, bytearray)):
                     continue
-                try:
-                    pcm = decoder.decode(bytes(message), self.frame_size)
-                except Exception:
-                    logger.exception("opus decode failed")
-                    continue
-                stream.write(pcm)
+                stream.write(bytes(message))
         finally:
             stream.stop()
             stream.close()

@@ -1,14 +1,14 @@
 """
 Cloud-side audio bridge (M14).
 
-Listens on a WebSocket for Opus-encoded mic frames from the OptiPlex,
-decodes them, feeds PCM into the orchestrator, and streams synthesized
-TTS back the other way.
+Listens on a WebSocket for raw int16 PCM mic frames from the OptiPlex,
+feeds them into the orchestrator, and streams synthesized TTS PCM back
+the other way. No codec on the wire for M15 burn-in — Opus can layer in
+later on the RunPod side (apt install libopus0) without changing the
+client API.
 
-Heavy deps (`websockets`, `opuslib`) are imported lazily — the module
-imports cleanly even when audio packages aren't installed, so unit
-tests and cloud-bridge-unrelated code paths stay importable on PJ's
-non-GPU dev box.
+`websockets` is imported lazily so the module imports cleanly even when
+the audio packages aren't installed.
 
 Wire with:
     bridge = CloudAudioBridge(orchestrator, idle_watcher)
@@ -25,17 +25,15 @@ from .idle_watcher import IdleWatcher
 
 SAMPLE_RATE = 48000
 CHANNELS = 1
-FRAME_SIZE = 960   # 20ms at 48kHz
+FRAME_SIZE = 960   # 20ms at 48kHz (1920 bytes of int16 PCM per frame)
 
 
 logger = logging.getLogger("renee.server.audio_bridge")
 
 
 def _lazy_imports():
-    """Import opus + websockets only when the bridge actually starts."""
     import websockets      # noqa: F401
-    import opuslib         # noqa: F401
-    return websockets, opuslib
+    return websockets
 
 
 class CloudAudioBridge:
@@ -53,25 +51,11 @@ class CloudAudioBridge:
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_size = frame_size
-        self._decoder = None
-        self._encoder = None
         self._server = None
-
-    # -------------------- wiring --------------------
-
-    def _ensure_codecs(self) -> None:
-        if self._decoder is not None and self._encoder is not None:
-            return
-        _, opuslib = _lazy_imports()
-        self._decoder = opuslib.Decoder(self.sample_rate, self.channels)
-        self._encoder = opuslib.Encoder(
-            self.sample_rate, self.channels, opuslib.APPLICATION_VOIP
-        )
 
     # -------------------- receive (mic -> ASR pipeline) --------------------
 
     async def _receive_audio(self, ws) -> None:
-        self._ensure_codecs()
         feed: Callable[[bytes], Awaitable[None]] = getattr(
             self.orchestrator, "feed_audio", None
         )
@@ -81,11 +65,7 @@ class CloudAudioBridge:
         async for message in ws:
             if not isinstance(message, (bytes, bytearray)):
                 continue
-            try:
-                pcm = self._decoder.decode(bytes(message), self.frame_size)
-            except Exception:
-                logger.exception("opus decode failed")
-                continue
+            pcm = bytes(message)
             if self.idle_watcher is not None:
                 self.idle_watcher.mark_activity()
             try:
@@ -96,17 +76,11 @@ class CloudAudioBridge:
     # -------------------- send (TTS -> speaker) --------------------
 
     async def _send_audio(self, ws) -> None:
-        self._ensure_codecs()
         stream = getattr(self.orchestrator, "tts_output_stream", None)
         if stream is None:
             return
         async for pcm_chunk in stream():
-            try:
-                frame = self._encoder.encode(pcm_chunk, self.frame_size)
-            except Exception:
-                logger.exception("opus encode failed")
-                continue
-            await ws.send(frame)
+            await ws.send(pcm_chunk)
 
     # -------------------- connection handler --------------------
 
@@ -125,9 +99,9 @@ class CloudAudioBridge:
     # -------------------- lifecycle --------------------
 
     async def start(self, host: str = "0.0.0.0", port: int = 8765):
-        websockets, _ = _lazy_imports()
+        websockets = _lazy_imports()
         self._server = await websockets.serve(self.handle_client, host, port)
-        logger.info("audio bridge listening on ws://%s:%d", host, port)
+        logger.info("audio bridge listening on ws://%s:%d (raw PCM)", host, port)
         return self._server
 
     async def stop(self) -> None:
