@@ -577,6 +577,8 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=float, default=0.25)
+    parser.add_argument("--base-dir", default=None,
+                        help="Override output base directory (used in tests).")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -588,7 +590,7 @@ def main():
         print(f"{voice_env} not set in .env", file=sys.stderr)
         sys.exit(1)
 
-    base_dir = REPO_ROOT / "paralinguistics" / args.voice
+    base_dir = Path(args.base_dir) if args.base_dir else REPO_ROOT / "paralinguistics" / args.voice
     base_dir.mkdir(parents=True, exist_ok=True)
 
     wanted: Optional[set[str]] = set(args.only) if args.only else None
