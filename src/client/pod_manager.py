@@ -84,19 +84,21 @@ class PodManager:
     # -------------------- commands --------------------
 
     def wake(self, *, wait_s: int = 180, poll_interval_s: int = 5) -> dict:
-        """Start the pod; wait until it's RUNNING or timeout. Returns a summary dict."""
+        """Start the pod; wait until it's actually up or timeout. Returns a summary dict."""
         if not self.settings.pod_id:
             raise RuntimeError("No pod_id configured (set RENEE_POD_ID or configs/deployment.yaml).")
         rp = self._client()
         rp.resume_pod(self.settings.pod_id, gpu_count=1)
         deadline = time.time() + wait_s
         while time.time() < deadline:
-            pod = rp.get_pod(self.settings.pod_id)
-            status = getattr(pod, "status", "UNKNOWN")
-            if status == "RUNNING":
-                public_ip = getattr(pod, "public_ip", "")
+            pod = rp.get_pod(self.settings.pod_id) or {}
+            # desiredStatus flips to RUNNING as soon as resume is accepted;
+            # uptimeSeconds > 0 is the signal that the container has actually
+            # booted and we can hand out a bridge URL.
+            if pod.get("desiredStatus") == "RUNNING" and (pod.get("uptimeSeconds") or 0) > 0:
+                public_ip = _public_ip_from_pod(pod)
                 return {
-                    "status": status,
+                    "status": "RUNNING",
                     "public_ip": public_ip,
                     "bridge_url": self.settings.bridge_url_template.format(host=public_ip),
                 }
@@ -114,10 +116,18 @@ class PodManager:
         if not self.settings.pod_id:
             return {"status": "NOT_CONFIGURED"}
         rp = self._client()
-        pod = rp.get_pod(self.settings.pod_id)
+        pod = rp.get_pod(self.settings.pod_id) or {}
         return {
-            "status": getattr(pod, "status", "UNKNOWN"),
-            "public_ip": getattr(pod, "public_ip", ""),
-            "uptime": getattr(pod, "uptime", ""),
-            "gpu_type": getattr(pod, "gpu_type", ""),
+            "status": pod.get("desiredStatus", "UNKNOWN"),
+            "public_ip": _public_ip_from_pod(pod),
+            "uptime_seconds": pod.get("uptimeSeconds", 0) or 0,
+            "gpu_type": (pod.get("machine") or {}).get("gpuDisplayName", ""),
         }
+
+
+def _public_ip_from_pod(pod: dict) -> str:
+    runtime = pod.get("runtime") or {}
+    for port in runtime.get("ports") or []:
+        if port.get("isIpPublic") and port.get("ip"):
+            return port["ip"]
+    return ""

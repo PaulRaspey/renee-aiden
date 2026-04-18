@@ -8,7 +8,7 @@ cloud:
   provider: runpod
   pod_id: mdrg4q0hlcoed2
   pod_template: renee-prod
-  gpu_type: H100_SXM
+  gpu_type: A100_SXM
   volume_name: renee-persistent
   volume_size_gb: 150
   region: US-TX  # closest to Dallas

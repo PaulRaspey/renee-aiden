@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -45,12 +44,21 @@ def test_bridge_url_template_uses_configured_port():
 
 class FakeRunpod:
     def __init__(self):
-        self.pod = SimpleNamespace(
-            status="RUNNING",
-            public_ip="1.2.3.4",
-            uptime="5m",
-            gpu_type="H100_SXM",
-        )
+        # Matches the real runpod.get_pod() dict shape.
+        self.pod = {
+            "id": "pod-42",
+            "desiredStatus": "RUNNING",
+            "uptimeSeconds": 42,
+            "machine": {"gpuDisplayName": "A100 SXM"},
+            "runtime": {
+                "ports": [
+                    {"ip": "10.0.0.1", "isIpPublic": False, "privatePort": 22,
+                     "publicPort": 19000, "type": "tcp"},
+                    {"ip": "1.2.3.4", "isIpPublic": True, "privatePort": 22,
+                     "publicPort": 18469, "type": "tcp"},
+                ],
+            },
+        }
         self.resumed = False
         self.stopped = False
         self.api_key = None
@@ -58,11 +66,13 @@ class FakeRunpod:
     def resume_pod(self, pod_id, gpu_count=1):
         self.resumed = True
         self.resumed_gpu_count = gpu_count
-        self.pod.status = "RUNNING"
+        self.pod["desiredStatus"] = "RUNNING"
+        self.pod["uptimeSeconds"] = 42
 
     def stop_pod(self, pod_id):
         self.stopped = True
-        self.pod.status = "STOPPED"
+        self.pod["desiredStatus"] = "EXITED"
+        self.pod["uptimeSeconds"] = 0
 
     def get_pod(self, pod_id):
         return self.pod
@@ -124,4 +134,17 @@ def test_status_reports_running_pod(monkeypatch):
     monkeypatch.setattr(mgr, "_client", lambda: fake)
     info = mgr.status()
     assert info["status"] == "RUNNING"
-    assert info["gpu_type"] == "H100_SXM"
+    assert info["gpu_type"] == "A100 SXM"
+    assert info["public_ip"] == "1.2.3.4"
+    assert info["uptime_seconds"] == 42
+
+
+def test_status_ignores_private_ips_when_selecting_public(monkeypatch):
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpod()
+    # Swap the public IP entry to private — should return empty string.
+    for p in fake.pod["runtime"]["ports"]:
+        p["isIpPublic"] = False
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    info = mgr.status()
+    assert info["public_ip"] == ""
