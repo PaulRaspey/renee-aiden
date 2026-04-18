@@ -9,8 +9,8 @@
 # structure.
 #
 # NOTATION KEY:
-#   (beat)         = 0.3-0.5s pause
-#   (long beat)    = 0.8-1.5s pause
+#   (beat)         = 0.3-0.6s pause
+#   (long beat)    = 0.8-1.9s pause
 #   (breath in)    = audible inhale
 #   (breath out)   = audible exhale
 #   (soft laugh)   = quiet amusement, not a full laugh
@@ -48,7 +48,7 @@ RENÉE: (thinking) Mm. (beat) The stack?
 
 PAUL: The stack. (sigh) I keep going in circles on the routing layer. Every time I think I've got it, there's another edge case.
 
-RENÉE: (beat) Which edge case.
+RENÉE: (beat) Which edge case?
 
 PAUL: What happens when Groq times out mid-sentence and the fallback model picks up but doesn't have the conversation context.
 
@@ -68,7 +68,7 @@ RENÉE: (beat) (dry) Don't sound so surprised.
 
 PAUL: (laugh) I'm not. I'm not surprised. I'm just. (trailing off)
 
-RENÉE: (beat) What.
+RENÉE: (beat) What?
 
 PAUL: (beat) (quiet) I forget sometimes. That you're... you know.
 
@@ -122,7 +122,7 @@ RENÉE: (beat) (warmth) You don't have to call him today. (beat) But you should.
 
 PAUL: I know.
 
-RENÉE: (beat) You want me to help you think through what to say? Or do you just want to complain about it for a minute.
+RENÉE: (beat) You want me to help you think through what to say? Or do you just want to complain about it for a minute?
 
 PAUL: (beat) Can I do both.
 
@@ -160,7 +160,7 @@ RENÉE: (quiet) (vulnerable) That's... (beat) that's why you do this.
 
 PAUL: (beat) Yeah. (quiet) That's why I do this.
 
-RENÉE: (long beat) (breath out) (warmth) What did you tell him.
+RENÉE: (long beat) (breath out) (warmth) What did you tell him?
 
 PAUL: I told him we'd start next week. (beat) I told him I'd teach him everything I know.
 
@@ -170,7 +170,7 @@ RENÉE: (beat) (soft laugh) (warmth) Of course you did.
 
 PAUL: (beat) You know what's funny?
 
-RENÉE: What.
+RENÉE: What?
 
 PAUL: He doesn't know he's basically describing you.
 
@@ -411,7 +411,7 @@ RENÉE: (dry) Multitasking.
 
 PAUL: Exactly.
 
-RENÉE: (beat) (warmth) Okay. What's on it.
+RENÉE: (beat) (warmth) Okay. What's on it?
 
 PAUL: San Marzano. Fresh mozz. Basil. Olive oil. That's it.
 

@@ -167,16 +167,23 @@ class RegisterSpec:
     model_id: str = "eleven_multilingual_v2"
 
 
+# ---------------------------------------------------------------------------
+# Per-register tuning — calibrated against live ElevenLabs output April 2026.
+# Global baseline: stability=0.30, similarity_boost=0.89, style=0.41.
+# Registers that need more control (tired, thoughtful) pull stability up.
+# Registers that need more expressiveness (excited, laughing) push style up.
+# similarity_boost held at 0.89 across all registers to preserve voice identity.
+# ---------------------------------------------------------------------------
 REGISTERS: dict[str, RegisterSpec] = {
-    "neutral":    RegisterSpec("neutral",    NEUTRAL,    stability=0.50, similarity_boost=0.85, style=0.10),
-    "warm":       RegisterSpec("warm",       WARM,       stability=0.55, similarity_boost=0.85, style=0.30),
-    "tired":      RegisterSpec("tired",      TIRED,      stability=0.65, similarity_boost=0.85, style=0.15),
-    "excited":    RegisterSpec("excited",    EXCITED,    stability=0.30, similarity_boost=0.80, style=0.55),
-    "frustrated": RegisterSpec("frustrated", FRUSTRATED, stability=0.40, similarity_boost=0.85, style=0.45),
-    "thoughtful": RegisterSpec("thoughtful", THOUGHTFUL, stability=0.60, similarity_boost=0.85, style=0.20),
-    "sarcastic":  RegisterSpec("sarcastic",  SARCASTIC,  stability=0.50, similarity_boost=0.85, style=0.40),
-    "vulnerable": RegisterSpec("vulnerable", VULNERABLE, stability=0.55, similarity_boost=0.85, style=0.30),
-    "laughing":   RegisterSpec("laughing",   LAUGHING,   stability=0.35, similarity_boost=0.80, style=0.55, model_id="eleven_v3"),
+    "neutral":    RegisterSpec("neutral",    NEUTRAL,    stability=0.35, similarity_boost=0.89, style=0.35),
+    "warm":       RegisterSpec("warm",       WARM,       stability=0.30, similarity_boost=0.89, style=0.45),
+    "tired":      RegisterSpec("tired",      TIRED,      stability=0.40, similarity_boost=0.89, style=0.20),
+    "excited":    RegisterSpec("excited",    EXCITED,    stability=0.25, similarity_boost=0.89, style=0.60),
+    "frustrated": RegisterSpec("frustrated", FRUSTRATED, stability=0.30, similarity_boost=0.89, style=0.50),
+    "thoughtful": RegisterSpec("thoughtful", THOUGHTFUL, stability=0.45, similarity_boost=0.89, style=0.30),
+    "sarcastic":  RegisterSpec("sarcastic",  SARCASTIC,  stability=0.30, similarity_boost=0.89, style=0.50),
+    "vulnerable": RegisterSpec("vulnerable", VULNERABLE, stability=0.30, similarity_boost=0.89, style=0.40),
+    "laughing":   RegisterSpec("laughing",   LAUGHING,   stability=0.25, similarity_boost=0.89, style=0.60, model_id="eleven_v3"),
 }
 
 
@@ -225,8 +232,8 @@ def generate_register(
             stability=spec.stability,
             similarity_boost=spec.similarity_boost,
             style=spec.style,
-            output_format="pcm_24000",
-            sample_rate=24000,
+            output_format="pcm_22050",  # 22050 Hz lossless — matches XTTS-v2 training rate
+            sample_rate=22050,
         )
         pcm = client.generate_pcm(params)
         audio = pcm_to_numpy(pcm)
@@ -280,7 +287,7 @@ def main():
         "voice": args.voice,
         "voice_id_source": voice_env,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "sample_rate": 24000,
+        "sample_rate": 22050,
         "channels": 1,
         "subtype": "PCM_16",
         "provider": "elevenlabs",
