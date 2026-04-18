@@ -617,6 +617,16 @@ def main():
         )
         if not selected:
             records = _harvest_existing(spec, base_dir)
+        else:
+            # Decision #29: --only must never drop entries from the index.
+            # generate_category only iterates range(1, count+1), so any WAVs
+            # beyond count on disk would be lost. Merge them back in via
+            # _harvest_existing; generated records keep precedence so their
+            # richer fields (prompt, stability, style) survive.
+            generated_files = {r["file"] for r in records}
+            for rec in _harvest_existing(spec, base_dir):
+                if rec["file"] not in generated_files:
+                    records.append(rec)
         all_records.extend(records)
         _write_metadata(base_dir, args.voice, all_records)
         print(f"  -> {len(records)} records")
