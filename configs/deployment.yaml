@@ -6,6 +6,7 @@ mode: cloud
 # Cloud configuration (RunPod)
 cloud:
   provider: runpod
+  pod_id: mdrg4q0hlcoed2
   pod_template: renee-prod
   gpu_type: H100_SXM
   volume_name: renee-persistent
