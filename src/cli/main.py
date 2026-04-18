@@ -23,6 +23,13 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(REPO_ROOT / ".env")
+except ImportError:
+    pass
+
+
 def _emit_encryption_warning() -> None:
     if os.environ.get("RENEE_SKIP_ENCRYPT_WARN") == "1":
         return
