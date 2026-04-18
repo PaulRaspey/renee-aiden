@@ -55,8 +55,9 @@ class FakeRunpod:
         self.stopped = False
         self.api_key = None
 
-    def resume_pod(self, pod_id):
+    def resume_pod(self, pod_id, gpu_count=1):
         self.resumed = True
+        self.resumed_gpu_count = gpu_count
         self.pod.status = "RUNNING"
 
     def stop_pod(self, pod_id):

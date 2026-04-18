@@ -88,7 +88,7 @@ class PodManager:
         if not self.settings.pod_id:
             raise RuntimeError("No pod_id configured (set RENEE_POD_ID or configs/deployment.yaml).")
         rp = self._client()
-        rp.resume_pod(self.settings.pod_id)
+        rp.resume_pod(self.settings.pod_id, gpu_count=1)
         deadline = time.time() + wait_s
         while time.time() < deadline:
             pod = rp.get_pod(self.settings.pod_id)
