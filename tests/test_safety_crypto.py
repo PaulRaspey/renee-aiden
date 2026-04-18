@@ -81,6 +81,37 @@ def test_derive_key_regenerates_when_file_wrong_length(tmp_path: Path):
     assert broken.read_bytes() == key
 
 
+def test_derive_key_stashes_fresh_fallback_key_into_keyring(tmp_path: Path, monkeypatch):
+    """Decision 54: keyring miss → fallback file created → stash into keyring."""
+    from src.safety import memory_crypto as mc
+
+    stashed: dict = {}
+    monkeypatch.setattr(mc, "_try_keyring_get", lambda service, username: None)
+    def fake_set(service, username, key):
+        stashed["service"] = service
+        stashed["username"] = username
+        stashed["key"] = key
+        return True
+    monkeypatch.setattr(mc, "_try_keyring_set", fake_set)
+
+    cfg = MemoryEncryptionConfig(
+        enabled=True,
+        keyring_service="svc",
+        keyring_username="user",
+        fallback_key_filename=".stash_key",
+    )
+    key = derive_key(cfg, tmp_path)
+    assert stashed.get("key") == key
+    assert stashed["service"] == "svc"
+    assert stashed["username"] == "user"
+
+    # Second call on an existing file should not re-stash.
+    stashed.clear()
+    key2 = derive_key(cfg, tmp_path)
+    assert key2 == key
+    assert stashed == {}
+
+
 def test_memory_vault_write_read_round_trip(tmp_path: Path):
     key = os.urandom(KEY_BYTES)
     vault = MemoryVault(path=tmp_path / "renee.vault", key=key)

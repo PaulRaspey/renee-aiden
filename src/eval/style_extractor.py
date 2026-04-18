@@ -309,7 +309,12 @@ def _callback_hits(ts: list[TurnRecord]) -> int:
 
 
 def _scene_mood_label(s: SceneStats) -> str:
-    """Rough scene-tone classification from marker density."""
+    """Rough scene-tone classification from marker density.
+
+    Injection point for a future small-model classifier: when
+    `safety.yaml style_reference.use_llm_mood_labels` is true, route
+    through a classifier here and return its label instead.
+    """
     per_turn = max(1, s.renee_turns + s.paul_turns)
     if s.sharp >= 2 or (s.sighs + s.breaths) >= 5 and s.laughs == 0:
         return "conflict"

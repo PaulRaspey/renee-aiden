@@ -62,3 +62,9 @@ memory_encryption:
   keyring_username: "renee-memory-key"
   # Fallback key path (inside the state dir) if keyring is unavailable.
   fallback_key_filename: ".memory_key"
+
+style_reference:
+  # Placeholder: when true, _scene_mood_label routes through a small-model
+  # classifier instead of the heuristic marker-count rules (Decision 48).
+  # No consumer yet; flag stubbed so a future classifier can drop in.
+  use_llm_mood_labels: false

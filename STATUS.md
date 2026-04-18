@@ -9,13 +9,13 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 **Phase:** M0, M2–M14 green. M1 ASR + M10 live audio still need a CUDA GPU / audio deps.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `M14 cloud deployment: startup + bridge + pod manager + CLI`
+**Last commit:** `cleanup: tuning and hardening pass M12-M14`
 **Next milestone:** M15 long-running test (or install audio deps for live M0/M1)
 **Blockers:** None for text-mode. Live audio still needs CUDA for XTTS-v2 and the
 OptiPlex thin client needs `sounddevice` / `opuslib` / `websockets` / `runpod`
-installed locally.
+installed locally — `renee check-deps` will tell you which.
 
-**Test summary:** 298 tests passing. 4 pre-existing memory tests fail on
+**Test summary:** 300 tests passing. 4 pre-existing memory tests fail on
 HuggingFace network access only.
 
 ## How to resume
@@ -87,6 +87,33 @@ HuggingFace network access only.
 - [x] **ip_reminder fix** — Groq/Qwen occasionally leaks `<ip_reminder>`
       system tags. Stripped in the output filter pipeline (closed, orphan,
       and prose line forms); logged as `ip_reminder` in filter hits.
+- [x] **Cleanup: tuning and hardening pass M12-M14**
+      - M12: `_scene_mood_label` marked with small-model classifier injection
+        point; `style_reference.use_llm_mood_labels: false` stub flag in
+        `configs/safety.yaml` (no consumer yet).
+      - M13: CLI startup prints one stderr warning when
+        `memory_encryption.enabled` is false, silenceable via
+        `RENEE_SKIP_ENCRYPT_WARN=1`. New test covers the keyring
+        fallback-then-stash path (Decision 54).
+        `HealthMonitor.daily_summary()` returns today's partial-day minutes
+        as a float for in-session usage checks.
+      - M14: new `renee check-deps` subcommand reports which of
+        websockets/opuslib/sounddevice/runpod are missing and the pip
+        command to install each. `renee export --dry-run` lists files
+        without copying. Idle-watcher rearm assertion already present at
+        `tests/test_server_idle_watcher.py::test_mark_activity_rearms_after_trigger`,
+        verified.
+      - Groq filter: `FilterReport.hit_rate(n_turns)` stateless method
+        added; eval harness aggregate now reports `filter_hits_total` and
+        `filter_hit_rate`.
+      - **Skipped:** ElevenLabs voice-settings retuning. Per Decision #1,
+        ElevenLabs is reference-only (corpus + paralinguistic library at
+        build time); runtime TTS is XTTS-v2. The `el_client.py` defaults
+        (stability 0.5, style 0.2) are only used when a script doesn't
+        override them, and every caller in `scripts/` sets
+        per-register/per-category values. Moving the defaults to
+        `configs/renee.yaml voice_settings` would have no observable
+        effect until a runtime ElevenLabs path exists.
 
 ## What's next
 

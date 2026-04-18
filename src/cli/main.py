@@ -14,12 +14,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _emit_encryption_warning() -> None:
+    if os.environ.get("RENEE_SKIP_ENCRYPT_WARN") == "1":
+        return
+    try:
+        import yaml
+        cfg = yaml.safe_load(
+            (REPO_ROOT / "configs" / "safety.yaml").read_text(encoding="utf-8")
+        ) or {}
+        enabled = bool((cfg.get("memory_encryption") or {}).get("enabled", False))
+    except Exception:
+        return
+    if not enabled:
+        print(
+            "warning: memory_encryption.enabled=false — plaintext vault. "
+            "RENEE_SKIP_ENCRYPT_WARN=1 to silence.",
+            file=sys.stderr,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,11 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show pod status")
     sub.add_parser("text", help="local text-mode REPL")
     sub.add_parser("eval", help="run the eval harness")
+    sub.add_parser("check-deps", help="report which optional audio/cloud deps are missing")
 
     export_p = sub.add_parser("export", help="export state to a directory")
     export_p.add_argument(
         "--output", default=str(REPO_ROOT / "exports"),
         help="destination directory",
+    )
+    export_p.add_argument(
+        "--dry-run", action="store_true",
+        help="list files that would be exported without copying",
     )
 
     parser.add_argument(
@@ -116,16 +141,44 @@ def cmd_eval(args) -> int:
 def cmd_export(args) -> int:
     state_dir = REPO_ROOT / "state"
     dest = Path(args.output)
-    dest.mkdir(parents=True, exist_ok=True)
-    copied = 0
+    dry_run = bool(getattr(args, "dry_run", False))
+    if not dry_run:
+        dest.mkdir(parents=True, exist_ok=True)
+    files: list[str] = []
     for src_path in state_dir.rglob("*"):
         if src_path.is_file():
             rel = src_path.relative_to(state_dir)
-            out = dest / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(src_path.read_bytes())
-            copied += 1
-    print(json.dumps({"copied_files": copied, "destination": str(dest)}, indent=2))
+            files.append(str(rel))
+            if not dry_run:
+                out = dest / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(src_path.read_bytes())
+    if dry_run:
+        print(json.dumps({"dry_run": True, "would_export": files, "destination": str(dest)}, indent=2))
+    else:
+        print(json.dumps({"copied_files": len(files), "destination": str(dest)}, indent=2))
+    return 0
+
+
+def cmd_check_deps(args) -> int:
+    deps = [
+        ("websockets", "pip install websockets"),
+        ("opuslib", "pip install opuslib"),
+        ("sounddevice", "pip install sounddevice"),
+        ("runpod", "pip install runpod"),
+    ]
+    missing: list[dict] = []
+    for mod, cmd in deps:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append({"module": mod, "install": cmd})
+    if missing:
+        print(json.dumps({"missing": missing}, indent=2))
+        for m in missing:
+            print(f"  {m['module']}: {m['install']}", file=sys.stderr)
+        return 1
+    print(json.dumps({"missing": []}, indent=2))
     return 0
 
 
@@ -140,6 +193,7 @@ HANDLERS = {
     "text": cmd_text,
     "eval": cmd_eval,
     "export": cmd_export,
+    "check-deps": cmd_check_deps,
 }
 
 
@@ -149,6 +203,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.command:
         parser.print_help()
         return 0
+    _emit_encryption_warning()
     handler = HANDLERS.get(args.command)
     if handler is None:
         parser.print_help()

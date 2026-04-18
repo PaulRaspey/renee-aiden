@@ -33,6 +33,15 @@ def test_record_turn_aggregates_daily_minutes(tmp_path: Path, clock: FakeClock):
     assert hm.daily_minutes() == pytest.approx(2.5, abs=1e-2)
 
 
+def test_daily_summary_matches_partial_day(tmp_path: Path, clock: FakeClock):
+    hm = HealthMonitor(tmp_path / "health.db", now_fn=clock)
+    hm.record_turn(120_000)  # 2 min
+    hm.record_turn(60_000)   # 1 min
+    summary = hm.daily_summary()
+    assert isinstance(summary, float)
+    assert summary == pytest.approx(3.0, abs=1e-2)
+
+
 def test_rolling_daily_minutes_spans_multiple_days(tmp_path: Path, clock: FakeClock):
     hm = HealthMonitor(tmp_path / "health.db", now_fn=clock)
     hm.record_turn(60_000)

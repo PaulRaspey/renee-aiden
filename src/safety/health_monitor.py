@@ -120,6 +120,13 @@ class HealthMonitor:
         total_ms = float(row[0] or 0.0)
         return round(total_ms / 60000.0, 3)
 
+    def daily_summary(self) -> float:
+        """In-session convenience: minutes logged so far for the current
+        local day. Unlike `check_flags()`, this includes the partial
+        today window so the caller can see usage without waiting for a
+        completed day."""
+        return self.daily_minutes()
+
     def rolling_daily_minutes(self, days: int) -> list[tuple[str, float]]:
         today = self._now_fn().date()
         out: list[tuple[str, float]] = []

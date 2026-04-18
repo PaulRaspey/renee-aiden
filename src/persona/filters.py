@@ -61,6 +61,12 @@ class FilterReport:
     regenerate_hint: str | None = None
     sycophancy_flag: bool = False
 
+    def hit_rate(self, n_turns: int) -> float:
+        """Hits per N turns. Stateless — caller supplies the turn count."""
+        if n_turns <= 0:
+            return 0.0
+        return len(self.hits) / n_turns
+
 
 def strip_ai_isms(text: str) -> tuple[str, list[str]]:
     hits = AI_ISMS_RE.findall(text)

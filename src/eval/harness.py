@@ -267,6 +267,16 @@ class EvalHarness:
             if r.scores
         ]
 
+        # Late import: eval.__init__ eagerly loads harness, and persona.filters
+        # is loaded during persona package init, so importing it at module
+        # scope introduces a circular import on test collection.
+        from ..persona.filters import FilterReport
+        all_filter_hits = [
+            h for r in rows for h in (r.context.get("filter_hits") or [])
+        ]
+        aggregated = FilterReport(text="", hits=all_filter_hits)
+        filter_hit_rate = aggregated.hit_rate(len(rows))
+
         def pct(p: float, arr: list[float]) -> float:
             if not arr:
                 return 0.0
@@ -286,6 +296,8 @@ class EvalHarness:
             "pushback_hits": pushback_hits,
             "pushback_rate": round(pushback_hits / max(1, len(pushback_rows)), 3),
             "length_mean": round(sum(lengths) / max(1, len(lengths)), 2),
+            "filter_hits_total": len(all_filter_hits),
+            "filter_hit_rate": round(filter_hit_rate, 3),
         }
 
 
