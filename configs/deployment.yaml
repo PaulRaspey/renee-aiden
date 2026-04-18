@@ -24,6 +24,19 @@ cloud:
   daily_spend_alert_usd: 15
   monthly_budget_usd: 500
 
+  # Model artifacts fetched by scripts/volume_setup.py onto
+  # /workspace/models/<local_name>/ at provision time.
+  # Swap quant variants by editing repo_id (e.g., -AWQ, -GPTQ-Int4, -GGUF).
+  model_repos:
+    - repo_id: Qwen/Qwen3-32B-Instruct-AWQ
+      local_name: qwen3-32b-instruct-awq
+    - repo_id: openai/whisper-large-v3-turbo
+      local_name: whisper-large-v3-turbo
+    - repo_id: coqui/XTTS-v2
+      local_name: xtts-v2
+    - repo_id: sentence-transformers/all-MiniLM-L6-v2
+      local_name: all-MiniLM-L6-v2
+
 # Local configuration (for when RTX Pro 6000 arrives)
 local:
   workspace: "C:\\Users\\Epsar\\Desktop\\renee-workspace"
