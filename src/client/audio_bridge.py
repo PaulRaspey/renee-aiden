@@ -23,6 +23,9 @@ SAMPLE_RATE = 48000
 CHANNELS = 1
 FRAME_SIZE = 960   # 20ms at 48kHz (1920 bytes of int16 PCM per frame)
 JITTER_BUFFER_CHUNKS = 4   # prime ~80ms of audio before playback starts
+JITTER_QUEUE_MAX = 128     # hard cap on queued chunks (~2.5s) — if we fall
+                           # this far behind, drop the oldest rather than
+                           # grow the buffer unbounded and widen latency
 
 
 logger = logging.getLogger("renee.client.audio_bridge")
@@ -102,31 +105,79 @@ class ClientAudioBridge:
             stream = await self._open_stream(sd.OutputStream, "speaker")
             if stream is None:
                 return
-            # Prime the output stream with a few chunks before the first
-            # write so sounddevice's internal buffer has slack for the
-            # inevitable TCP jitter during the initial burst.
-            prime: list = []
-            primed = False
-            try:
-                async for message in ws:
-                    if not isinstance(message, (bytes, bytearray)):
+            # Producer/consumer with an asyncio queue and underrun recovery:
+            # receive frames into the queue as fast as they arrive; drain to
+            # the device from a separate coroutine. If the queue empties we
+            # re-prime before resuming so a transient TCP stall doesn't
+            # propagate as a choppy cut-in.
+            queue: asyncio.Queue = asyncio.Queue(maxsize=JITTER_QUEUE_MAX)
+            _SENTINEL: object = object()
+
+            async def _producer() -> None:
+                try:
+                    async for message in ws:
+                        if not isinstance(message, (bytes, bytearray)):
+                            continue
+                        audio = np.frombuffer(message, dtype=np.int16)
+                        # Drop the oldest frame if we've fallen far behind —
+                        # growing the queue past JITTER_QUEUE_MAX would just
+                        # add permanent latency with no audible benefit.
+                        if queue.full():
+                            try:
+                                queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                        await queue.put(audio)
+                finally:
+                    await queue.put(_SENTINEL)
+
+            async def _consumer() -> None:
+                primed = False
+                while True:
+                    if not primed:
+                        pending: list = []
+                        while len(pending) < JITTER_BUFFER_CHUNKS:
+                            chunk = await queue.get()
+                            if chunk is _SENTINEL:
+                                return
+                            pending.append(chunk)
+                        for chunk in pending:
+                            await asyncio.to_thread(stream.write, chunk)
+                        primed = True
                         continue
                     try:
-                        audio = np.frombuffer(message, dtype=np.int16)
-                        if not primed:
-                            prime.append(audio)
-                            if len(prime) >= JITTER_BUFFER_CHUNKS:
-                                for chunk in prime:
-                                    stream.write(chunk)
-                                prime.clear()
-                                primed = True
-                        else:
-                            stream.write(audio)
-                    except Exception:
-                        logger.warning("speaker write failed; reopening stream", exc_info=True)
-                        break
-                else:
-                    return  # async-for completed normally → ws closed
+                        chunk = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        # Underrun — drop back into priming so we rebuild
+                        # the safety backlog before the next write.
+                        primed = False
+                        continue
+                    if chunk is _SENTINEL:
+                        return
+                    await asyncio.to_thread(stream.write, chunk)
+
+            producer_task = asyncio.create_task(_producer())
+            consumer_task = asyncio.create_task(_consumer())
+            try:
+                done, pending = await asyncio.wait(
+                    {producer_task, consumer_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+                for t in pending:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for t in done:
+                    exc = t.exception()
+                    if exc is not None:
+                        logger.warning(
+                            "speaker task raised; reopening stream",
+                            exc_info=exc,
+                        )
+                return  # websocket closed (producer finished first, naturally)
             finally:
                 _safe_close(stream)
 
