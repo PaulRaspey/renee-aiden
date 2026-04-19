@@ -10,12 +10,21 @@ For text-first M2 we only need Groq + Ollama. Anthropic is wired but optional.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+
+logger = logging.getLogger("renee.llm_router")
+
+
+OLLAMA_UNAVAILABLE_FALLBACK = (
+    "I'm having trouble thinking right now. Give me a moment."
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -179,13 +188,39 @@ class LLMRouter:
 
         if backend == "ollama":
             if self.ollama_client is None:
-                raise RuntimeError("Ollama not available.")
+                logger.warning(
+                    "Ollama backend requested but ollama package not installed; "
+                    "returning fallback response."
+                )
+                return LLMResponse(
+                    text=OLLAMA_UNAVAILABLE_FALLBACK,
+                    backend="ollama",
+                    model=self.ollama_model,
+                    latency_ms=(time.time() - t0) * 1000,
+                )
             full = [{"role": "system", "content": system_prompt}] + messages
-            resp = self.ollama_client.chat(
-                model=self.ollama_model,
-                messages=full,
-                options={"temperature": temperature, "num_predict": max_tokens},
-            )
+            try:
+                resp = self.ollama_client.chat(
+                    model=self.ollama_model,
+                    messages=full,
+                    options={"temperature": temperature, "num_predict": max_tokens},
+                )
+            except Exception as e:
+                # Ollama's client raises ConnectionError/httpx.ConnectError when
+                # the local daemon isn't running. Rather than letting that
+                # bubble up as a traceback in the conversation log, degrade
+                # gracefully with a fixed response so the user hears something
+                # coherent while the ops side gets fixed.
+                logger.warning(
+                    "Ollama backend unavailable (%s: %s); returning fallback response.",
+                    type(e).__name__, e,
+                )
+                return LLMResponse(
+                    text=OLLAMA_UNAVAILABLE_FALLBACK,
+                    backend="ollama",
+                    model=self.ollama_model,
+                    latency_ms=(time.time() - t0) * 1000,
+                )
             latency = (time.time() - t0) * 1000
             text = resp.get("message", {}).get("content", "") or ""
             return LLMResponse(
