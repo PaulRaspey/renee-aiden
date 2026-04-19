@@ -17,6 +17,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(REPO_ROOT / ".env")
+except ImportError:  # pragma: no cover
+    pass
+
+
 try:
     from groq import Groq
 except ImportError:  # pragma: no cover
@@ -92,15 +102,25 @@ class LLMRouter:
         self.ollama_client = ollama.Client(host=self.ollama_host) if ollama else None
 
     def decide_backend(self, user_text: str, expected_depth: str = "normal") -> Backend:
-        # Heuristic router. Replace with learned classifier later.
-        length = len(user_text)
+        # Prefer Groq whenever GROQ_API_KEY is set — on the pod, Ollama
+        # isn't running and its client constructor is non-lazy about the
+        # object but lazy about the connection, so routing to Ollama
+        # there blows up at generate() time. Deep turns also prefer
+        # cloud reasoning over the local fast model.
         if expected_depth == "deep":
-            return "groq"
-        # Short casual or backchannel-ish → local Gemma
-        if length < 40 and not any(k in user_text.lower() for k in ["why", "how", "explain", "tell me", "what do you"]):
+            if self.groq_client is not None:
+                return "groq"
+            if self.anthropic_client is not None:
+                return "anthropic"
             if self.ollama_client is not None:
                 return "ollama"
-        return "groq" if self.groq_client else ("ollama" if self.ollama_client else "anthropic")
+            return "groq"
+
+        if self.groq_client is not None:
+            return "groq"
+        if self.ollama_client is not None:
+            return "ollama"
+        return "anthropic"
 
     def generate(
         self,
