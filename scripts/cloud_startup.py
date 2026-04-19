@@ -207,7 +207,12 @@ async def startup(
     else:
         try:
             from src.server.audio_bridge import CloudAudioBridge
-            bridge = CloudAudioBridge(orchestrator, idle_watcher=idle)
+            greet = bool((deploy.get("startup") or {}).get("greeting", False))
+            bridge = CloudAudioBridge(
+                orchestrator,
+                idle_watcher=idle,
+                greet_on_connect=greet,
+            )
             await bridge.start(port=port)
         except Exception as e:
             errors.append(f"audio_bridge_start: {e!r}")

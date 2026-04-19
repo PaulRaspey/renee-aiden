@@ -45,12 +45,16 @@ class CloudAudioBridge:
         sample_rate: int = SAMPLE_RATE,
         channels: int = CHANNELS,
         frame_size: int = FRAME_SIZE,
+        greet_on_connect: bool = False,
+        greeting_prompt: str = "system: greet paul, he just connected",
     ):
         self.orchestrator = orchestrator
         self.idle_watcher = idle_watcher
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_size = frame_size
+        self.greet_on_connect = greet_on_connect
+        self.greeting_prompt = greeting_prompt
         self._server = None
 
     # -------------------- receive (mic -> ASR pipeline) --------------------
@@ -99,6 +103,13 @@ class CloudAudioBridge:
     async def handle_client(self, ws, path: str = "") -> None:
         receive_task = asyncio.create_task(self._receive_audio(ws))
         send_task = asyncio.create_task(self._send_audio(ws))
+        greeting_task: Optional[asyncio.Task] = None
+        if self.greet_on_connect:
+            greet = getattr(self.orchestrator, "greet_on_connect", None)
+            if callable(greet):
+                greeting_task = asyncio.create_task(greet(self.greeting_prompt))
+            else:
+                logger.debug("greet_on_connect enabled but orchestrator lacks hook")
         try:
             # Exit as soon as either side finishes (typically because the
             # websocket closed). Waiting on gather() would hang forever when
@@ -124,6 +135,8 @@ class CloudAudioBridge:
             for t in (receive_task, send_task):
                 if not t.done():
                     t.cancel()
+            if greeting_task is not None and not greeting_task.done():
+                greeting_task.cancel()
 
     # -------------------- lifecycle --------------------
 

@@ -523,6 +523,30 @@ class Orchestrator:
             except Exception:
                 logger.exception("tts.speak raised")
 
+    async def greet_on_connect(
+        self, prompt: str = "system: greet paul, he just connected"
+    ) -> None:
+        """Run one LLM turn and speak the result — used by the bridge to
+        have Renée initiate the conversation when Paul connects, rather
+        than waiting for him to speak first.
+
+        Runs inside a task spawned by the bridge; exceptions are swallowed
+        so a greeting failure never kills the connection.
+        """
+        try:
+            output = await asyncio.to_thread(
+                self.text_turn, prompt, list(self._voice_history),
+            )
+        except Exception:
+            logger.exception("greet_on_connect: text_turn raised")
+            return
+        self._voice_history.append({"role": "assistant", "content": output.text})
+        if self.tts is not None and output.text:
+            try:
+                await self.tts.speak(output.text)
+            except Exception:
+                logger.exception("greet_on_connect: tts.speak raised")
+
     async def tts_output_stream(self):
         """Async generator consumed by CloudAudioBridge._send_audio.
 
