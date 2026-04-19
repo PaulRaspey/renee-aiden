@@ -182,6 +182,7 @@ async def startup(
     elapsed = time.time() - t0
     bridge_url = f"ws://0.0.0.0:{port}"
     logger.info("startup complete in %.1fs; bridge=%s", elapsed, bridge_url)
+
     return StartupResult(
         ok=not errors,
         elapsed_s=round(elapsed, 2),
@@ -196,14 +197,25 @@ def _load_deploy(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    result = asyncio.run(startup())
+async def _serve_forever() -> int:
+    result = await startup()
     if not result.ok:
         print(f"startup finished with errors: {result.errors}")
         return 1
     print(f"renee ready on {result.bridge_url} in {result.elapsed_s}s")
+    # Hold the event loop open so the audio bridge keeps serving. Without
+    # this, startup() returns and asyncio.run() tears down the loop, which
+    # closes the websocket server and the pod stops accepting connections.
+    try:
+        await asyncio.sleep(float("inf"))
+    except asyncio.CancelledError:
+        pass
     return 0
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    return asyncio.run(_serve_forever())
 
 
 if __name__ == "__main__":
