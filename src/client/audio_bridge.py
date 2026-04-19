@@ -71,37 +71,83 @@ class ClientAudioBridge:
     # -------------------- mic -> cloud --------------------
 
     async def _send_mic(self, ws, sd) -> None:
-        stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype="int16",
-            blocksize=self.frame_size,
-            device=self.input_device,
-        )
-        stream.start()
-        try:
-            while self._running:
-                audio, _ = stream.read(self.frame_size)
-                await ws.send(audio.tobytes())
-        finally:
-            stream.stop()
-            stream.close()
+        # Outer loop handles "no input device yet" and mid-session device
+        # loss without killing the websocket — the previous version raised
+        # on InputStream() or read(), which canceled _receive_speaker via
+        # asyncio.gather and dropped the whole connection.
+        while self._running:
+            stream = await self._open_stream(sd.InputStream, "mic")
+            if stream is None:  # _running flipped while we were waiting
+                return
+            try:
+                while self._running:
+                    try:
+                        audio, _ = stream.read(self.frame_size)
+                    except Exception:
+                        logger.warning("mic read failed; reopening stream", exc_info=True)
+                        break
+                    # Websocket errors are fatal — let them propagate so
+                    # gather() tears the connection down cleanly.
+                    await ws.send(audio.tobytes())
+            finally:
+                _safe_close(stream)
 
     # -------------------- cloud -> speaker --------------------
 
     async def _receive_speaker(self, ws, sd) -> None:
-        stream = sd.OutputStream(
+        while self._running:
+            stream = await self._open_stream(sd.OutputStream, "speaker")
+            if stream is None:
+                return
+            try:
+                async for message in ws:
+                    if not isinstance(message, (bytes, bytearray)):
+                        continue
+                    try:
+                        stream.write(bytes(message))
+                    except Exception:
+                        logger.warning("speaker write failed; reopening stream", exc_info=True)
+                        break
+                else:
+                    return  # async-for completed normally → ws closed
+            finally:
+                _safe_close(stream)
+
+    # -------------------- helpers --------------------
+
+    async def _open_stream(self, factory, label: str, *, retry_s: float = 5.0):
+        kwargs = dict(
             samplerate=self.sample_rate,
             channels=self.channels,
             dtype="int16",
-            device=self.output_device,
+            device=self.input_device if label == "mic" else self.output_device,
         )
-        stream.start()
-        try:
-            async for message in ws:
-                if not isinstance(message, (bytes, bytearray)):
-                    continue
-                stream.write(bytes(message))
-        finally:
-            stream.stop()
-            stream.close()
+        if label == "mic":
+            kwargs["blocksize"] = self.frame_size
+        warned = False
+        while self._running:
+            try:
+                stream = factory(**kwargs)
+                stream.start()
+                if warned:
+                    logger.info("%s stream now available", label)
+                return stream
+            except Exception as e:
+                if not warned:
+                    logger.warning("%s unavailable (%s); waiting for a device …", label, e)
+                    warned = True
+                else:
+                    logger.debug("%s still unavailable (%s)", label, e)
+                await asyncio.sleep(retry_s)
+        return None
+
+
+def _safe_close(stream) -> None:
+    try:
+        stream.stop()
+    except Exception:
+        pass
+    try:
+        stream.close()
+    except Exception:
+        pass
