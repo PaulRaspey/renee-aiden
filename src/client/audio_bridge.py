@@ -22,6 +22,7 @@ import numpy as np
 SAMPLE_RATE = 48000
 CHANNELS = 1
 FRAME_SIZE = 960   # 20ms at 48kHz (1920 bytes of int16 PCM per frame)
+JITTER_BUFFER_CHUNKS = 4   # prime ~80ms of audio before playback starts
 
 
 logger = logging.getLogger("renee.client.audio_bridge")
@@ -101,13 +102,26 @@ class ClientAudioBridge:
             stream = await self._open_stream(sd.OutputStream, "speaker")
             if stream is None:
                 return
+            # Prime the output stream with a few chunks before the first
+            # write so sounddevice's internal buffer has slack for the
+            # inevitable TCP jitter during the initial burst.
+            prime: list = []
+            primed = False
             try:
                 async for message in ws:
                     if not isinstance(message, (bytes, bytearray)):
                         continue
                     try:
                         audio = np.frombuffer(message, dtype=np.int16)
-                        stream.write(audio)
+                        if not primed:
+                            prime.append(audio)
+                            if len(prime) >= JITTER_BUFFER_CHUNKS:
+                                for chunk in prime:
+                                    stream.write(chunk)
+                                prime.clear()
+                                primed = True
+                        else:
+                            stream.write(audio)
                     except Exception:
                         logger.warning("speaker write failed; reopening stream", exc_info=True)
                         break
