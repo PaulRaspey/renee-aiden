@@ -16,6 +16,8 @@ import asyncio
 import logging
 from typing import Optional
 
+import numpy as np
+
 
 SAMPLE_RATE = 48000
 CHANNELS = 1
@@ -104,7 +106,8 @@ class ClientAudioBridge:
                     if not isinstance(message, (bytes, bytearray)):
                         continue
                     try:
-                        stream.write(bytes(message))
+                        audio = np.frombuffer(message, dtype=np.int16)
+                        stream.write(audio)
                     except Exception:
                         logger.warning("speaker write failed; reopening stream", exc_info=True)
                         break
