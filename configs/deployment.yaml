@@ -6,7 +6,7 @@ mode: cloud
 # Cloud configuration (RunPod)
 cloud:
   provider: runpod
-  pod_id: mdrg4q0hlcoed2
+  pod_id: uopulnt3lmphso
   pod_template: renee-prod
   gpu_type: A100_SXM
   volume_name: renee-persistent
@@ -14,7 +14,8 @@ cloud:
   region: US-TX  # closest to Dallas
   
   # Ports exposed on pod
-  audio_bridge_port: 8765
+  audio_bridge_port: 8765                # internal (container) port
+  audio_bridge_port_external: 10287      # public TCP port mapped by RunPod; what the OptiPlex connects to
   eval_dashboard_port: 7860
   
   # Auto-shutdown after N minutes of silence (no audio input)
