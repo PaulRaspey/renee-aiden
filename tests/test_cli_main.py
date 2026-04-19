@@ -63,10 +63,8 @@ def test_proxy_handler_respects_explicit_bridge_url(monkeypatch, tmp_path):
 
     captured = {}
 
-    async def fake_run_proxy(*, bridge_url, port, ssl_context=None):
-        captured["bridge_url"] = bridge_url
-        captured["port"] = port
-        captured["ssl_context"] = ssl_context
+    async def fake_run_proxy(**kwargs):
+        captured.update(kwargs)
 
     monkeypatch.setattr("src.client.proxy_server.run_proxy", fake_run_proxy)
 
@@ -79,7 +77,11 @@ def test_proxy_handler_respects_explicit_bridge_url(monkeypatch, tmp_path):
     )
     rc = cli_main.cmd_proxy(args)
     assert rc == 0
-    assert captured == {"bridge_url": "ws://explicit:1", "port": 9999, "ssl_context": None}
+    assert captured["bridge_url"] == "ws://explicit:1"
+    assert captured["port"] == 9999
+    assert captured["ssl_context"] is None
+    # cert_path is None when --https is off.
+    assert captured.get("cert_path") is None
 
 
 def test_export_command_accepts_output_flag():

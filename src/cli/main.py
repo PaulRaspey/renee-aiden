@@ -188,21 +188,31 @@ def cmd_proxy(args) -> int:
     print(f"bridge: {bridge_url}")
 
     ssl_context = None
+    cert_pem_path = None
     if args.https:
         try:
-            from src.client.cert_manager import ensure_self_signed_cert
+            from src.client.cert_manager import CERT_NAME, ensure_self_signed_cert
             from src.client.proxy_server import tailscale_ip
 
             cert_dir = REPO_ROOT / "state" / "certs"
             extra = [ip for ip in [tailscale_ip()] if ip]
             ssl_context = ensure_self_signed_cert(cert_dir, extra_hosts=extra)
+            cert_pem_path = cert_dir / CERT_NAME
         except Exception as e:
             print(f"HTTPS setup failed ({e}); falling back to HTTP", file=sys.stderr)
             ssl_context = None
+            cert_pem_path = None
 
+    qr_png_path = REPO_ROOT / "state" / "renee_connect_qr.png"
     try:
         asyncio.run(
-            run_proxy(bridge_url=bridge_url, port=port, ssl_context=ssl_context)
+            run_proxy(
+                bridge_url=bridge_url,
+                port=port,
+                ssl_context=ssl_context,
+                cert_path=cert_pem_path,
+                qr_png_path=qr_png_path,
+            )
         )
     except KeyboardInterrupt:
         print("\nproxy stopped.")

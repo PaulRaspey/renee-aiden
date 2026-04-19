@@ -6,250 +6,130 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M0, M2–M14 green. M1 ASR + M10 live audio still need a CUDA GPU / audio deps.
+**Phase:** Mobile PWA bridge verified end-to-end on matrix (2026-04-18). M0, M2-M14 green plus M14.mobile (PWA + proxy + TLS). M1 ASR + live audio still need CUDA for XTTS-v2.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** `cleanup: tuning and hardening pass M12-M14`
-**Next milestone:** M15 long-running test (or install audio deps for live M0/M1)
-**Blockers:** None for text-mode. Live audio still needs CUDA for XTTS-v2 and the
-OptiPlex thin client needs `sounddevice` / `opuslib` / `websockets` / `runpod`
-installed locally — `renee check-deps` will tell you which.
+**Last commit:** see git log; latest sweep commit below.
+**Next milestone:** UAHP/QAL/Groq fallback/deployment.yaml drift sweep, then M15 long-running test.
+**Blockers:** Phone-side manual cert trust is the only step a test cannot script. See "Blocked on Paul" at the bottom if present.
 
-**Test summary:** 300 tests passing. 4 pre-existing memory tests fail on
-HuggingFace network access only.
+**Test summary:** 378 tests passing with 3 DeprecationWarnings from the websockets shim. 4 pre-existing memory tests still fail on HuggingFace network access only.
 
 ## How to resume
 
 1. `cd C:\Users\Epsar\Desktop\renee-aiden`
 2. `.venv\Scripts\activate`
 3. `python -m pytest tests/ --ignore=tests/acceptance --ignore=tests/test_memory.py`
-4. `python -m renee` to see CLI surface. `python -m renee text` drops into the M2 REPL.
-5. Read `docs/USAGE.md` for earlier CLI. For voice: `scripts/generate_reference_corpus.py`
-   and `scripts/generate_paralinguistic_library.py`.
-6. Rotate the ElevenLabs key — it was pasted in chat. Update `.env` after rotation.
+4. `python -m renee` to see CLI surface.
+5. Mobile: `scripts\start_renee_mobile.bat --https` then open the QR on the phone.
 
-## What's done
+---
+
+## Verified steps (this session: 2026-04-18)
+
+### Step 1: proxy_server static + WebSocket + cert route
+Verified 2026-04-18 on matrix.
+Exercised: bound a real websockets server, curled `/`, `/manifest.json`, `/sw.js`, `/cert`, `/missing`. Asserted exact Content-Types: `text/html; charset=utf-8`, `application/manifest+json`, `application/javascript` with `Service-Worker-Allowed: /`, `application/x-x509-ca-cert` with `Content-Disposition: attachment; filename="renee-proxy.crt"`, and 404 with `text/plain; charset=utf-8`.
+Incidental fixes:
+- `src/client/proxy_server.py`: manifest served via `mimetypes.guess_type` (gave `application/json`); replaced with an explicit `_STATIC_ROUTES` table that pins each route's MIME and extra headers. Chrome refused the old service worker because the MIME type was not one of the accepted JS MIMEs.
+- `src/client/proxy_server.py`: `/sw.js` now emits `Service-Worker-Allowed: /` so the worker can register for the whole origin rather than just `/static/`.
+- `src/client/proxy_server.py`: added `/cert` route that streams the PEM file with `application/x-x509-ca-cert` and a filename so iOS Safari offers to install it. Falls back to 404 when the proxy is run without `--https`.
+- `src/client/proxy_server.py`: added `/client.js` route so the PWA shell can reference the JS by path (needed for the resampler tests).
+
+### Step 2: proxy_server reconnect + give-up + 50x stress
+Verified 2026-04-18 on matrix.
+Exercised: real websockets bridges on two distinct ports with a resolver callable; dropped bridge A mid-stream and asserted the phone WebSocket stayed open while the proxy reconnected to bridge B within 5 seconds. 50 concurrent connect/disconnect cycles left `proxy.active_client_count == 0` and `bridge.active_bridge_conns == set()`. With no bridge reachable, the proxy closes the phone WebSocket with `code=1011` and reason `"bridge unavailable"`.
+Incidental fixes:
+- `src/client/proxy_server.py`: the bridge URL was resolved once at the top of `_serve`, so when the resolver would have returned a new host (RunPod IP changed or the test swapped bridges), the proxy kept hammering the stale address. Moved resolution inside the retry loop.
+- `src/client/proxy_server.py`: added `_clients` dict keyed by connection id + `active_client_count` property so stress tests can assert there are no leaked handler tasks.
+- `src/client/proxy_server.py`: switched to exponential backoff clamped to 30 seconds per attempt (was a flat delay) so the give-up path is predictable.
+- `tests/test_proxy_server.py`: docstring on the 1011 test notes that Windows `asyncio` takes ~2s to fail a refused TCP connect; `max_reconnects=0` keeps the test under 3 seconds.
+
+### Step 3: Tailscale IP auto-detect
+Verified 2026-04-18 on matrix. `tailscale ip -4` returned `100.78.253.97` and `ps.tailscale_ip()` matched exactly.
+Exercised: live parity test that runs the CLI and compares its output to the in-process detector.
+Incidental fixes: none.
+Deferred: the two-tailnet-node live curl (needs Paul's phone). The CLI prints the URL and the QR; run `scripts\start_renee_mobile.bat --https` and scan. Marked under "Blocked on Paul" below.
+
+### Step 4: Self-signed certificate SAN + validity + key strength + /cert
+Verified 2026-04-18 on matrix.
+Exercised: minted certs into `state/certs/`; parsed the PEM with `cryptography.x509`; asserted SAN included the machine hostname, `localhost`, `127.0.0.1`, and any Tailscale IP passed in `extra_hosts`. Asserted `cert.not_valid_after_utc - cert.not_valid_before_utc >= 365 days` (we ship 3650). Asserted key is RSA 2048+ (we ship 2048).
+Incidental fixes:
+- `src/cli/main.py`: threaded the minted cert path into `run_proxy(cert_path=...)` so the `/cert` endpoint works only when `--https` is on.
+- `src/cli/main.py`: on HTTPS startup the QR print line instructs the user to "install the CA from `<base>/cert`" on first use; avoids the iOS Safari WSS-after-HTTPS double-trust puzzle.
+
+### Step 5: QR code CMD code-page detect + PNG fallback
+Verified 2026-04-18 on matrix.
+Exercised: `render_qr_ascii` is pure 7-bit ASCII (verified via `.encode('ascii')`), `render_qr_png` writes a valid PNG whose pixel bytes match a fresh `qrcode.make(url)` encoding of the same URL (byte-for-byte, proving no scheme/port/trailing-slash mangling). `terminal_supports_ascii_qr` returns False on non-65001 Windows console code pages and True on UTF-8 or non-Windows.
+Incidental fixes:
+- `src/client/proxy_server.py`: added `terminal_supports_ascii_qr()` using `ctypes.windll.kernel32.GetConsoleOutputCP`. On non-UTF-8 CMD the ASCII QR renders as garbage characters, so we skip the in-terminal QR and rely on the PNG fallback saved to `state/renee_connect_qr.png`.
+- `src/client/proxy_server.py`: `run_proxy` accepts `qr_png_path` and always generates the PNG regardless of code page; absolute path is printed with the connect URL.
+- `requirements.txt`: added `pillow` so `qrcode.make` can write PNGs on fresh installs.
+
+### Step 6: AudioWorklet 48000 resampling + overlay unlock
+Verified 2026-04-18 on matrix.
+Exercised: Python mirror of the JS resampler at `src/client/audio_resample.py`, tested with a 440 Hz sine at 44100 Hz resampled to 48000 Hz. Windowed FFT peak sits within 1 Hz of 440 Hz. Repeated for 22050 Hz (common iOS hardware rate) at 1 kHz. Ran the JS resampler under Node with the same input and verified the output length and zero-crossing frequency estimate match the Python result to two significant figures.
+Incidental fixes:
+- `src/client/web/client.js`: replaced the old int16-only worklet with a Float32 worklet plus a streaming linear resampler in the main thread. The worklet posts Float32 chunks to the main thread; the main thread interpolates, clamps, and converts to int16 LE before sending over the WebSocket. Carries `tail` (fractional source index) and `lastSample` across chunks so frame boundaries do not tick.
+- `src/client/web/client.js`: `unlockAndStart` now aborts and keeps the overlay visible when `audioCtx.state !== "running"` after `resume()`. The overlay is only dismissed once the context is actually running, satisfying the "not dismissable before the context is running" requirement.
+- `src/client/web/client.js`: logs `audioContext.sampleRate` at start so Paul can see the rate mismatch in DevTools if playback sounds off.
+
+### Step 7: Backgrounding + wakeLock lifecycle
+Verified 2026-04-18 on matrix.
+Exercised: ran `client.js` under Node with a hand-rolled DOM shim. Traced `WebSocket` instantiation, `wakeLock.request` and `.release` calls. Scenarios: start session (asserted 1 WebSocket opened + 1 wake-lock acquired), `visibilitychange` with a live WebSocket (asserted still 1 WebSocket, no second connect), `close` event then `visibilitychange` (asserted exactly 2 opens, no reconnect storm), `pagehide` (asserted wake-lock released).
+Incidental fixes:
+- `src/client/web/client.js`: `connectWS` now guards against double-entry using `ws.readyState` and clears a pending `reconnectTimer` before scheduling a new attempt. Previously a ws.onclose plus a visibilitychange in quick succession could schedule two timers.
+- `src/client/web/client.js`: added `stopSession` wired to `pagehide` and `beforeunload` so the wake-lock is released when the page goes away; also clears any pending reconnect timer.
+- `src/client/web/client.js`: `unlockAndStart` acquires the wake-lock once at session start rather than firing-and-forgetting at load time.
+- `src/client/web/index.html`: moved the inline script to `/client.js` so the proxy can serve it as a named resource and tests can diff against a single canonical copy.
+
+### Step 8: Transcript relay per-client isolation
+Verified 2026-04-18 on matrix.
+Exercised: two concurrent phone clients connecting to the proxy, each with its own bridge emitting a label-tagged JSON transcript. Phone A received only `hello-A`, phone B received only `hello-B`, no cross-talk. On the orchestrator side, `register_transcript_listener(conn_id, cb)` fans out to all listeners, `unregister()` drops the entry, `transcript_listener_count()` returns zero after both connections end, and re-registering under the same `conn_id` overwrites without duplicate fan-out.
+Incidental fixes:
+- `src/orchestrator.py`: replaced the single `transcript_emitter` slot with a `{conn_id: cb}` dict plus `register_transcript_listener` / `transcript_listener_count`. The legacy `transcript_emitter` attribute is preserved as a property so existing tests and `cloud_startup.py` keep working; it falls through the fan-out last.
+- `src/server/audio_bridge.py`: `handle_client` now registers the emitter via the new API (keyed on `id(ws)`) and calls `unregister()` in `finally`, so the orchestrator holds no reference to a dead socket after disconnect.
+
+### Deferred
+
+- Two-tailnet-node live check: Paul opens `https://100.78.253.97:8766/` on his phone, accepts the cert, then installs the CA from `/cert`. I print the URL and the QR; this is the one step that cannot be scripted from the OptiPlex.
+
+---
+
+## What's done (pre-PWA, left for context)
 
 - [x] Architecture spec + 9 stack deep dives (including cloud deployment)
 - [x] Git repo, pushed to GitHub, private
 - [x] M0: scaffolding, UAHP identity, first tests
 - [x] M2/M3/M4: persona core, mood, memory, text chat REPL
-- [x] M5: reference voice corpus — 88 WAVs across 9 emotional registers
-- [x] M6: paralinguistic injector + library generator (3,600 clips, 47.3 min)
-- [x] M7: prosody layer (rate/pitch/pauses/effects, vulnerable-admission hard rule)
-- [x] M8: turn-taking (endpointer, latency, interruption)
+- [x] M5: reference voice corpus, 88 WAVs across 9 emotional registers
+- [x] M6: paralinguistic injector + library generator, 3,600 clips, 47.3 min
+- [x] M7: prosody layer, rate/pitch/pauses/effects, vulnerable-admission hard rule
+- [x] M8: turn-taking, endpointer, latency, interruption
 - [x] M9: backchannel layer
-- [x] M10: orchestrator (wires persona, paralinguistics, prosody, turn-taking)
-- [x] M11: eval harness (scorers, A/B, callbacks, style extractor, dashboard)
-- [x] **M12: expanded style extractor + persona/prosody integration**
-      - Scene-aware parsing; per-scene paralinguistic density and mood label
-      - Turn-length percentiles (p25/50/75/90/95/99)
-      - Callback graph (cross-scene anchors, Renée-owned recalls)
-      - Vocabulary texture (type/token ratio, top content words,
-        signature-phrase hits, sensory density)
-      - Pause distribution breakdown
-      - `src/persona/style_rules.py` loads the YAML into a `StyleReference`
-      - Persona prompt auto-injects STYLE CONSTRAINTS block with measured
-        targets; prosody planner absorbs measured per-tone paralinguistic
-        density and overrides the default density rules.
-- [x] **M13: safety layer**
-      - `src/safety/reality_anchors.py` — probabilistic reality anchors
-        with suppress flags + min-turn-gap, deterministic under RNG seed.
-      - `src/safety/health_monitor.py` — SQLite-backed daily minutes
-        aggregator, soft + stronger flags on sustained-days thresholds
-        with cooldown.
-      - `src/safety/pii_scrubber.py` — regex + name-boundary scrubber;
-        tokens <USER>/<CHILD_N>/<ADDRESS_N>/<SENSITIVE_N>/<EMAIL_N>/
-        <PHONE_N>. Round-trip unscrub with longest-token-first ordering.
-      - `src/safety/memory_crypto.py` — AES-256-GCM encrypt/decrypt with
-        magic header; `MemoryVault` path-scoped wrapper; key derivation
-        prefers keyring, falls back to state-dir keyfile.
-      - `configs/safety.yaml` ships with thresholds mirroring SAFETY.md.
-      - PersonaCore wires the safety layer: PII scrub pre-LLM, unscrub on
-        response path, reality anchor between filters and mood update,
-        health record at end of turn.
-- [x] **M14: cloud deployment skeleton**
-      - `scripts/cloud_startup.py` — 7-phase boot orchestrator (health,
-        UAHP, parallel model load, agent register, state restore, bridge,
-        self-test) with factory injection for testability.
-      - `src/server/audio_bridge.py` — WebSocket + Opus bridge shell on
-        the cloud side; lazy imports so module loads without audio deps.
-      - `src/server/idle_watcher.py` — pluggable-clock idle watcher with
-        one-shot fire + rearm-on-activity semantics.
-      - `src/client/audio_bridge.py` — OptiPlex thin client; mic capture
-        via sounddevice, opus encode/decode, WebSocket.
-      - `src/client/pod_manager.py` — RunPod lifecycle (wake / sleep /
-        status); `DeploymentSettings` parses `configs/deployment.yaml`.
-      - `src/cli/main.py` — argparse dispatcher; subcommands `wake`,
-        `talk`, `sleep`, `status`, `text`, `eval`, `export`.
-      - `src/__main__.py` + `renee/__main__.py` give both
-        `python -m src` and `python -m renee`.
-- [x] **ip_reminder fix** — Groq/Qwen occasionally leaks `<ip_reminder>`
-      system tags. Stripped in the output filter pipeline (closed, orphan,
-      and prose line forms); logged as `ip_reminder` in filter hits.
-- [x] **Cleanup: tuning and hardening pass M12-M14**
-      - M12: `_scene_mood_label` marked with small-model classifier injection
-        point; `style_reference.use_llm_mood_labels: false` stub flag in
-        `configs/safety.yaml` (no consumer yet).
-      - M13: CLI startup prints one stderr warning when
-        `memory_encryption.enabled` is false, silenceable via
-        `RENEE_SKIP_ENCRYPT_WARN=1`. New test covers the keyring
-        fallback-then-stash path (Decision 54).
-        `HealthMonitor.daily_summary()` returns today's partial-day minutes
-        as a float for in-session usage checks.
-      - M14: new `renee check-deps` subcommand reports which of
-        websockets/opuslib/sounddevice/runpod are missing and the pip
-        command to install each. `renee export --dry-run` lists files
-        without copying. Idle-watcher rearm assertion already present at
-        `tests/test_server_idle_watcher.py::test_mark_activity_rearms_after_trigger`,
-        verified.
-      - Groq filter: `FilterReport.hit_rate(n_turns)` stateless method
-        added; eval harness aggregate now reports `filter_hits_total` and
-        `filter_hit_rate`.
-      - **Skipped:** ElevenLabs voice-settings retuning. Per Decision #1,
-        ElevenLabs is reference-only (corpus + paralinguistic library at
-        build time); runtime TTS is XTTS-v2. The `el_client.py` defaults
-        (stability 0.5, style 0.2) are only used when a script doesn't
-        override them, and every caller in `scripts/` sets
-        per-register/per-category values. Moving the defaults to
-        `configs/renee.yaml voice_settings` would have no observable
-        effect until a runtime ElevenLabs path exists.
+- [x] M10: orchestrator, wires persona, paralinguistics, prosody, turn-taking
+- [x] M11: eval harness, scorers, A/B, callbacks, style extractor, dashboard
+- [x] M12: style extractor + persona/prosody integration
+- [x] M13: safety layer (anchors, health monitor, PII scrubber, memory crypto)
+- [x] M14: cloud deployment skeleton (RunPod lifecycle, audio bridge shells)
+- [x] M14.mobile: PWA proxy with HTTPS, QR, Tailscale detect, per-client transcripts (this session)
 
 ## What's next
 
-- [ ] Install audio deps (`sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`,
-      `websockets`, `runpod`) for live M0/M1/M14 runs.
-- [ ] First RunPod spin-up: run `scripts/volume_setup.py` to populate the
-      network volume, then `python -m renee wake`.
-- [ ] M15 long-running test — overnight conversation session with eval
-      dashboard snapshots every hour.
-- [ ] Revisit memory encryption once PJ's key-storage story is settled.
-- [ ] Hook the A/B queue into the CLI so PJ can rate pairs without leaving
-      the terminal.
+- [ ] UAHP/QAL/Groq-fallback/deployment.yaml drift sweep (task #19).
+- [ ] Install audio deps (`sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `runpod`) for live M0/M1/M14 audio-side runs.
+- [ ] First RunPod spin-up: run `scripts/volume_setup.py`, then `python -m renee wake`.
+- [ ] M15 long-running test, overnight conversation session with eval dashboard snapshots every hour.
+- [ ] Hook the A/B queue into the CLI so PJ can rate pairs without leaving the terminal.
+
+## Blocked on Paul
+
+- Phone-side install of the self-signed CA from `https://<matrix-tailscale>:8766/cert`. No way to script; requires tapping "Install" in iOS Safari then "Trust" in Settings, General, About, Certificate Trust Settings.
 
 ## Known risks / gotchas
 
-- **pcm_44100 unavailable on current ElevenLabs plan.** Using pcm_24000.
-  XTTS-v2 is native 24 kHz so this is fine; upgrade to Creator/Pro tier
-  only if 44.1 or 48 kHz archival quality is required.
-- **ElevenLabs rejects tag-only prompts.** Carrier syllables added.
-- **ElevenLabs returns sporadic 500s.** Client retries 5xx with exponential
-  backoff.
-- **eleven_v3 model tagging.** v3 for expressive tags, v2 for plain words.
-- **ElevenLabs API key was pasted in chat** (sk_78a455…). Rotate after
-  session.
-- **Qwen-on-Groq leaks ip_reminder tags.** Fixed in the filter, but if you
-  swap models double-check.
-- **Memory encryption off by default.** `MemoryVault` exists but isn't
-  wired into the SQLite memory store yet — flip
-  `configs/safety.yaml memory_encryption.enabled` when ready.
-- **Audio packages installed this session:** prior (M5-M6) — `soundfile`,
-  `librosa`, `pyloudnorm`, `pydub`, `elevenlabs`. Still NOT installed:
-  `sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `TTS` (Coqui),
-  `websockets`, `runpod`. `cryptography` is installed (46.0.7) and now
-  pinned in `requirements.txt`.
-
-## Code at a glance
-
-```
-src/
-├── __init__.py
-├── __main__.py                  python -m src dispatcher
-├── cli/
-│   ├── chat.py                  M2 REPL
-│   └── main.py                  M14 argparse dispatcher
-├── client/
-│   ├── audio_bridge.py          OptiPlex thin-client
-│   └── pod_manager.py           RunPod lifecycle + config
-├── server/
-│   ├── audio_bridge.py          cloud-side WebSocket + Opus bridge
-│   └── idle_watcher.py          idle auto-shutdown
-├── eval/
-│   ├── ab.py                    blind A/B queue
-│   ├── callbacks.py             callback hit tracker
-│   ├── dashboard.py             single-file HTML dashboard
-│   ├── harness.py               probe runner
-│   ├── metrics.py               turn telemetry store
-│   ├── probes.py                probe configs
-│   ├── report.py                eval report CLI
-│   ├── scorers.py               8 humanness axes
-│   └── style_extractor.py       M11+M12 script analyzer
-├── identity/
-│   └── uahp_identity.py         HMAC-SHA256 signed receipts
-├── memory/                      SQLite + FAISS tier-weighted retrieval
-├── orchestrator.py              M10 top-level pipeline
-├── paralinguistics/
-│   └── injector.py              M6 rule engine + clip selector
-├── persona/
-│   ├── core.py                  LLM turn + mood + filters + safety
-│   ├── filters.py               output scrubber (ip_reminder-aware)
-│   ├── llm_router.py            Groq / Ollama / Anthropic router
-│   ├── mood.py                  mood store + drift
-│   ├── persona_def.py           YAML loader
-│   ├── prompt_assembler.py      system prompt builder (style-aware)
-│   └── style_rules.py           M12 style reference loader
-├── safety/                      M13
-│   ├── config.py                SafetyConfig loader
-│   ├── facade.py                SafetyLayer composition
-│   ├── health_monitor.py        daily-minutes aggregator + flags
-│   ├── memory_crypto.py         AES-256-GCM + key derivation
-│   ├── pii_scrubber.py          CSP-style tokenizer
-│   └── reality_anchors.py       ~1-in-50 anchor injector
-├── turn_taking/                 M8-M9
-└── voice/
-    ├── prosody.py               M7 planner (style-aware)
-    └── xtts_loader.py           GPU load stub
-
-renee/                           python -m renee wrapper
-├── __init__.py
-└── __main__.py
-
-scripts/
-├── bootstrap.py
-├── chat.bat
-├── cloud_startup.py             M14 RunPod boot
-├── el_client.py
-├── generate_paralinguistic_library.py
-├── generate_reference_corpus.py
-└── renee_reference_script.md
-
-configs/
-├── aiden.yaml
-├── deployment.yaml
-├── humanness_probes.yaml
-├── prosody_rules.yaml
-├── renee.yaml
-├── safety.yaml                  M13
-└── style_reference.yaml         auto-generated, M11+M12
-
-tests/                           298 passing
-├── acceptance/
-├── test_audio_bridges_smoke.py
-├── test_backchannel.py
-├── test_cli_main.py
-├── test_client_pod_manager.py
-├── test_cloud_startup.py
-├── test_eval_ab.py
-├── test_eval_callbacks.py
-├── test_eval_harness.py
-├── test_eval_scorers.py
-├── test_eval_style_extractor.py
-├── test_filters.py
-├── test_identity.py
-├── test_memory.py               (HF-network dependent; skipped by default)
-├── test_metrics.py
-├── test_mood.py
-├── test_orchestrator.py
-├── test_paralinguistic_injector.py
-├── test_persona_config.py
-├── test_prosody.py
-├── test_safety_crypto.py
-├── test_safety_facade.py
-├── test_safety_health.py
-├── test_safety_pii.py
-├── test_safety_reality_anchors.py
-├── test_server_idle_watcher.py
-├── test_style_rules.py
-├── test_turn_taking.py
-└── test_xtts_loader.py
-```
+- **Windows asyncio refused-connect is slow.** `websockets.connect` to a closed port on Windows takes about 2 seconds before raising `ConnectionRefusedError` (proactor behaviour), not instant. Any test that measures the proxy's give-up path must budget at least 3 seconds per attempted retry.
+- **Tailscale must be running on the OptiPlex.** The proxy auto-detects via `tailscale ip -4`; if `tailscaled` is stopped we fall back to `socket.gethostname()` local IPs which are unreachable from the phone.
+- **Node 24 `navigator` is read-only.** Any Node-based shim for `client.js` must use `Object.defineProperty(globalThis, 'navigator', {...})`, not `global.navigator = {...}`. Fixed in `tests/test_client_js_lifecycle.py`.
+- **Qwen-on-Groq leaks ip_reminder tags.** Fixed in the filter, but if you swap models double-check.
+- **Memory encryption off by default.** `MemoryVault` exists but isn't wired into the SQLite memory store yet.

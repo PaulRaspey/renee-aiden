@@ -29,7 +29,7 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .identity.uahp_identity import CompletionReceipt
 from .paralinguistics.injector import (
@@ -286,10 +286,14 @@ class Orchestrator:
         self.tts: Optional[TTSPipeline] = tts
         self._voice_history: list[dict] = []
 
-        # Optional async callable set by the audio bridge: receives dict
-        # messages like {"type": "transcript", "speaker": "paul", "text": ...}
-        # and forwards them to the connected client. None = no sink.
-        self.transcript_emitter: Optional[Any] = None
+        # Per-connection transcript listeners, keyed by the connection id
+        # the bridge allocates on accept. Kept as a dict (not a set) so the
+        # bridge can prove zero references for a given connection after
+        # disconnect. The legacy ``transcript_emitter`` attribute below is
+        # a sugar slot preserved for back-compat: setting it registers a
+        # listener under the pseudo-id 0.
+        self._transcript_listeners: dict[Any, Any] = {}
+        self._legacy_emitter: Optional[Any] = None
 
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
@@ -535,17 +539,52 @@ class Orchestrator:
             except Exception:
                 logger.exception("tts.speak raised")
 
+    # ------------------------------------------------------------------
+    # transcript listener registry
+    # ------------------------------------------------------------------
+
+    def register_transcript_listener(self, conn_id: Any, cb) -> Callable[[], None]:
+        """Register an async callable for the given connection id. Returns a
+        ``remove()`` closure the caller invokes on disconnect. Registering
+        a second listener under the same conn_id replaces the first."""
+        self._transcript_listeners[conn_id] = cb
+
+        def _remove() -> None:
+            self._transcript_listeners.pop(conn_id, None)
+
+        return _remove
+
+    def transcript_listener_count(self) -> int:
+        return len(self._transcript_listeners) + (
+            1 if self._legacy_emitter is not None else 0
+        )
+
+    @property
+    def transcript_emitter(self):
+        return self._legacy_emitter
+
+    @transcript_emitter.setter
+    def transcript_emitter(self, cb) -> None:
+        self._legacy_emitter = cb
+
     async def _emit_transcript(self, msg: dict) -> None:
-        """Forward a transcript/response event to the bridge client, if one
-        is connected. Swallows exceptions: transcript display is a nice-to-
-        have and must never break the turn pipeline."""
-        emitter = getattr(self, "transcript_emitter", None)
-        if emitter is None:
-            return
-        try:
-            await emitter(msg)
-        except Exception:
-            logger.debug("transcript_emitter raised", exc_info=True)
+        """Fan out a transcript/response event to every registered
+        listener. Legacy ``transcript_emitter`` is delivered last so
+        tests that set it directly still observe the message. All
+        exceptions are swallowed so transcript display failures never
+        break the turn pipeline."""
+        # Snapshot to a list so a listener removing itself mid-iteration
+        # cannot mutate the dict we are walking.
+        for cb in list(self._transcript_listeners.values()):
+            try:
+                await cb(msg)
+            except Exception:
+                logger.debug("transcript listener raised", exc_info=True)
+        if self._legacy_emitter is not None:
+            try:
+                await self._legacy_emitter(msg)
+            except Exception:
+                logger.debug("legacy transcript_emitter raised", exc_info=True)
 
     async def greet_on_connect(
         self, prompt: str = "system: greet paul, he just connected"

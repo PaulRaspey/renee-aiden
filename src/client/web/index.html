@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#0b0d10" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Renée" />
+  <meta name="apple-mobile-web-app-title" content="Renee" />
   <link rel="manifest" href="/manifest.json" />
-  <title>Renée</title>
+  <title>Renee</title>
   <style>
     :root {
       color-scheme: dark;
@@ -123,283 +123,24 @@
   <div id="status" role="status"><span class="dot"></span><span id="status-text">connecting</span></div>
 
   <main>
-    <div id="orb" aria-label="Renée">
+    <div id="orb" aria-label="Renee">
       <div id="orb-label">idle</div>
     </div>
     <div id="transcript" aria-live="polite">
       <div class="line you"   id="line-you"><span class="who">you</span><span class="text"></span></div>
-      <div class="line renee" id="line-renee"><span class="who">renée</span><span class="text"></span></div>
+      <div class="line renee" id="line-renee"><span class="who">renee</span><span class="text"></span></div>
     </div>
   </main>
 
   <button id="ptt" hidden aria-pressed="false">Hold to talk</button>
 
   <div id="overlay" role="dialog" aria-modal="true">
-    <h1>Renée</h1>
+    <h1>Renee</h1>
     <p>Tap to grant microphone access and start talking. Works best with a stable Tailscale connection.</p>
     <button id="start">Tap to start</button>
     <p id="overlay-err" class="err" hidden></p>
   </div>
 
-  <script>
-  (() => {
-    const SAMPLE_RATE = 48000;
-    const WS_PATH = "/ws";
-
-    const statusEl = document.getElementById("status");
-    const statusText = document.getElementById("status-text");
-    const overlay = document.getElementById("overlay");
-    const overlayErr = document.getElementById("overlay-err");
-    const startBtn = document.getElementById("start");
-    const orb = document.getElementById("orb");
-    const orbLabel = document.getElementById("orb-label");
-    const youText = document.querySelector("#line-you .text");
-    const reneeText = document.querySelector("#line-renee .text");
-    const youLine = document.getElementById("line-you");
-    const reneeLine = document.getElementById("line-renee");
-    const ptt = document.getElementById("ptt");
-
-    let ws = null;
-    let audioCtx = null;
-    let micStream = null;
-    let micNode = null;
-    let captureMuted = false;   // PTT muting: when true, send silence
-    let pttEnabled = false;
-    let reconnectTimer = null;
-    let reconnectDelay = 1000;
-    let nextPlayTime = 0;
-    let lastAudioAt = 0;
-    let speakingTimer = null;
-
-    function setStatus(text, cls) {
-      statusText.textContent = text;
-      statusEl.className = cls || "";
-    }
-
-    function setOrb(mode) {
-      orb.classList.remove("listening", "speaking");
-      if (mode === "listening" || mode === "speaking") orb.classList.add(mode);
-      orbLabel.textContent = mode || "idle";
-    }
-
-    function showLine(el, textEl, text) {
-      textEl.textContent = text;
-      el.classList.add("show");
-    }
-
-    async function unlockAndStart() {
-      overlayErr.hidden = true;
-      try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-      } catch (e) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-      }
-      nextPlayTime = audioCtx.currentTime;
-
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: SAMPLE_RATE,
-          },
-          video: false,
-        });
-      } catch (e) {
-        overlayErr.textContent = "Microphone permission denied: " + e.message;
-        overlayErr.hidden = false;
-        return;
-      }
-
-      await setupWorklet();
-      overlay.hidden = true;
-      ptt.hidden = false;
-      connectWS();
-    }
-
-    async function setupWorklet() {
-      const code = `
-        class Capture extends AudioWorkletProcessor {
-          constructor() { super(); this._muted = false;
-            this.port.onmessage = (e) => { if (e.data && e.data.muted !== undefined) this._muted = e.data.muted; };
-          }
-          process(inputs) {
-            const ch = inputs[0][0];
-            if (!ch) return true;
-            const n = ch.length;
-            const out = new Int16Array(n);
-            if (!this._muted) {
-              for (let i = 0; i < n; i++) {
-                let s = ch[i];
-                if (s > 1) s = 1; else if (s < -1) s = -1;
-                out[i] = s < 0 ? s * 32768 : s * 32767;
-              }
-            }
-            this.port.postMessage(out.buffer, [out.buffer]);
-            return true;
-          }
-        }
-        registerProcessor('renee-capture', Capture);
-      `;
-      const url = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
-      await audioCtx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
-      const src = audioCtx.createMediaStreamSource(micStream);
-      micNode = new AudioWorkletNode(audioCtx, "renee-capture");
-      micNode.port.onmessage = (e) => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(e.data);
-      };
-      src.connect(micNode);
-      // Needed to keep the worklet processing; dest is effectively silent.
-      const sink = audioCtx.createGain();
-      sink.gain.value = 0;
-      micNode.connect(sink).connect(audioCtx.destination);
-    }
-
-    function setMuted(m) {
-      captureMuted = m;
-      if (micNode) micNode.port.postMessage({ muted: m });
-    }
-
-    function connectWS() {
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${window.location.host}${WS_PATH}`;
-      setStatus("connecting", "");
-      try {
-        ws = new WebSocket(url);
-        ws.binaryType = "arraybuffer";
-      } catch (e) {
-        setStatus("connection error", "error");
-        scheduleReconnect();
-        return;
-      }
-      ws.onopen = () => {
-        setStatus("connected", "connected");
-        reconnectDelay = 1000;
-        setOrb("listening");
-        if (pttEnabled) setMuted(true);   // start muted if PTT is active
-      };
-      ws.onclose = () => {
-        setStatus("reconnecting", "error");
-        setOrb("idle");
-        scheduleReconnect();
-      };
-      ws.onerror = () => setStatus("connection error", "error");
-      ws.onmessage = (ev) => handleMessage(ev.data);
-    }
-
-    function scheduleReconnect() {
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
-        connectWS();
-      }, reconnectDelay);
-    }
-
-    function handleMessage(data) {
-      if (typeof data === "string") {
-        try {
-          const msg = JSON.parse(data);
-          if (msg.type === "transcript") {
-            showLine(youLine, youText, msg.text || "");
-          } else if (msg.type === "response") {
-            showLine(reneeLine, reneeText, msg.text || "");
-          }
-        } catch (_) {}
-        return;
-      }
-      // Binary: int16 PCM @ 48kHz — schedule playback.
-      playPCM(new Int16Array(data));
-      noteSpeaking();
-    }
-
-    function playPCM(int16) {
-      if (!audioCtx) return;
-      const n = int16.length;
-      if (!n) return;
-      const f32 = new Float32Array(n);
-      for (let i = 0; i < n; i++) f32[i] = int16[i] / 32768;
-      const buf = audioCtx.createBuffer(1, n, SAMPLE_RATE);
-      buf.copyToChannel(f32, 0);
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf;
-      src.connect(audioCtx.destination);
-      const now = audioCtx.currentTime;
-      if (nextPlayTime < now) nextPlayTime = now;
-      src.start(nextPlayTime);
-      nextPlayTime += n / SAMPLE_RATE;
-    }
-
-    function noteSpeaking() {
-      lastAudioAt = performance.now();
-      setOrb("speaking");
-      if (speakingTimer) clearTimeout(speakingTimer);
-      speakingTimer = setTimeout(() => {
-        // If no audio received for 250 ms, revert to listening.
-        if (performance.now() - lastAudioAt >= 240) setOrb("listening");
-      }, 260);
-    }
-
-    // PTT
-    function pttDown(e) { e.preventDefault(); ptt.classList.add("active"); ptt.setAttribute("aria-pressed","true"); setMuted(false); }
-    function pttUp(e)   { e.preventDefault(); ptt.classList.remove("active"); ptt.setAttribute("aria-pressed","false"); setMuted(true); }
-    ptt.addEventListener("pointerdown", pttDown);
-    ptt.addEventListener("pointerup", pttUp);
-    ptt.addEventListener("pointercancel", pttUp);
-    ptt.addEventListener("pointerleave", pttUp);
-
-    // The PTT button is a fallback — the orb enables it on double-tap.
-    let orbTapTimer = null;
-    orb.addEventListener("click", () => {
-      if (orbTapTimer) {
-        clearTimeout(orbTapTimer); orbTapTimer = null;
-        pttEnabled = !pttEnabled;
-        ptt.hidden = !pttEnabled;
-        setMuted(pttEnabled);  // mute by default when PTT turned on
-      } else {
-        orbTapTimer = setTimeout(() => { orbTapTimer = null; }, 350);
-      }
-    });
-
-    // Service worker registration (offline shell).
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/sw.js").catch(() => {});
-      });
-    }
-
-    startBtn.addEventListener("click", unlockAndStart);
-
-    // Keep the tab awake on some browsers by reacting to visibility changes.
-    // On iOS Safari a screen lock can silently close the websocket; when the
-    // user unlocks and brings the tab forward we reconnect immediately
-    // instead of waiting for the next exponential-backoff tick.
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) return;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-        reconnectDelay = 1000;
-        connectWS();
-      }
-      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
-    });
-
-    // Request a wake lock when available so the screen doesn't sleep
-    // while Renée is active. Silent no-op on browsers that don't support it.
-    (async () => {
-      try {
-        if ("wakeLock" in navigator) {
-          await navigator.wakeLock.request("screen");
-        }
-      } catch (_) {}
-    })();
-  })();
-  </script>
+  <script src="/client.js"></script>
 </body>
 </html>

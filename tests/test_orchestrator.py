@@ -458,3 +458,56 @@ async def test_emitter_exception_does_not_break_turn(orchestrator: Orchestrator)
     orchestrator.transcript_emitter = bad_emitter
     # Should still finish the turn cleanly despite the emitter blowing up.
     await orchestrator._on_asr_final("hey")
+
+
+@pytest.mark.asyncio
+async def test_register_transcript_listener_fans_out_to_every_listener(
+    orchestrator: Orchestrator,
+):
+    a_msgs: list[dict] = []
+    b_msgs: list[dict] = []
+
+    async def cb_a(msg): a_msgs.append(msg)
+    async def cb_b(msg): b_msgs.append(msg)
+
+    unreg_a = orchestrator.register_transcript_listener("conn-a", cb_a)
+    unreg_b = orchestrator.register_transcript_listener("conn-b", cb_b)
+    assert orchestrator.transcript_listener_count() == 2
+
+    await orchestrator._on_asr_final("hello")
+    types_a = [m["type"] for m in a_msgs]
+    types_b = [m["type"] for m in b_msgs]
+    assert "transcript" in types_a and "response" in types_a
+    assert "transcript" in types_b and "response" in types_b
+
+    # Unregister one; further events go only to the other.
+    unreg_a()
+    assert orchestrator.transcript_listener_count() == 1
+    a_msgs.clear(); b_msgs.clear()
+    await orchestrator._on_asr_final("again")
+    assert a_msgs == []
+    assert len(b_msgs) >= 1
+
+    unreg_b()
+    assert orchestrator.transcript_listener_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_register_transcript_listener_overwrites_same_conn_id(
+    orchestrator: Orchestrator,
+):
+    """Same conn_id replaces its previous listener; no duplicate fan-out."""
+    count: list[int] = []
+
+    async def cb_v1(_m): count.append(1)
+    async def cb_v2(_m): count.append(2)
+
+    orchestrator.register_transcript_listener("conn", cb_v1)
+    orchestrator.register_transcript_listener("conn", cb_v2)
+    assert orchestrator.transcript_listener_count() == 1
+
+    await orchestrator._on_asr_final("hi")
+    # v2 receives both transcript + response events (2 messages). v1
+    # receives none.
+    assert 1 not in count
+    assert count == [2, 2]

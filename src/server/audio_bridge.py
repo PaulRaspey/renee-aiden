@@ -111,9 +111,22 @@ class CloudAudioBridge:
             except Exception:
                 logger.debug("transcript emit failed", exc_info=True)
 
-        prior_emitter = getattr(self.orchestrator, "transcript_emitter", None)
-        if hasattr(self.orchestrator, "transcript_emitter"):
+        # Prefer the new per-connection registry when the orchestrator
+        # exposes it; fall back to the legacy single-slot attribute so
+        # this module stays compatible with the minimal fake orchestrators
+        # in tests and in scripts/cloud_startup.py.
+        unregister: Optional[Callable[[], None]] = None
+        register = getattr(
+            self.orchestrator, "register_transcript_listener", None
+        )
+        if callable(register):
+            unregister = register(id(ws), _emit)
+        elif hasattr(self.orchestrator, "transcript_emitter"):
+            prior_emitter = getattr(self.orchestrator, "transcript_emitter", None)
             self.orchestrator.transcript_emitter = _emit
+
+            def unregister() -> None:
+                self.orchestrator.transcript_emitter = prior_emitter
 
         receive_task = asyncio.create_task(self._receive_audio(ws))
         send_task = asyncio.create_task(self._send_audio(ws))
@@ -151,8 +164,11 @@ class CloudAudioBridge:
                     t.cancel()
             if greeting_task is not None and not greeting_task.done():
                 greeting_task.cancel()
-            if hasattr(self.orchestrator, "transcript_emitter"):
-                self.orchestrator.transcript_emitter = prior_emitter
+            if unregister is not None:
+                try:
+                    unregister()
+                except Exception:
+                    logger.debug("transcript unregister raised", exc_info=True)
 
     # -------------------- lifecycle --------------------
 

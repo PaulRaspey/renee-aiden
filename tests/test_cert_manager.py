@@ -47,3 +47,51 @@ def test_generated_cert_includes_extra_host_in_san(tmp_path: Path):
     assert cert.issuer == cert.subject
     assert cert.public_key() is not None
     _ = serialization  # silence unused
+
+
+def test_cert_is_valid_at_least_365_days(tmp_path: Path):
+    import datetime as _dt
+
+    from cryptography import x509
+
+    ensure_self_signed_cert(tmp_path)
+    cert = x509.load_pem_x509_certificate((tmp_path / "proxy.pem").read_bytes())
+    lifetime = cert.not_valid_after_utc - cert.not_valid_before_utc
+    assert lifetime >= _dt.timedelta(days=365), (
+        f"cert lifetime {lifetime} is shorter than one year"
+    )
+
+
+def test_cert_key_is_at_least_2048_rsa(tmp_path: Path):
+    from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+
+    ensure_self_signed_cert(tmp_path)
+    cert = x509.load_pem_x509_certificate((tmp_path / "proxy.pem").read_bytes())
+    pk = cert.public_key()
+    if isinstance(pk, rsa.RSAPublicKey):
+        assert pk.key_size >= 2048
+    elif isinstance(pk, ec.EllipticCurvePublicKey):
+        assert pk.curve.key_size >= 256
+    else:
+        pytest.fail(f"unexpected key type {type(pk).__name__}")
+
+
+def test_san_includes_machine_hostname(tmp_path: Path):
+    """The hostname must appear in SAN so `https://matrix.local/` works."""
+    import socket as _s
+
+    from cryptography import x509
+
+    hostname = _s.gethostname()
+    if not hostname:
+        pytest.skip("no hostname to verify")
+    ensure_self_signed_cert(tmp_path)
+    cert = x509.load_pem_x509_certificate((tmp_path / "proxy.pem").read_bytes())
+    san = cert.extensions.get_extension_for_class(
+        x509.SubjectAlternativeName
+    ).value
+    dns_names = list(san.get_values_for_type(x509.DNSName))
+    assert hostname in dns_names, (
+        f"machine hostname {hostname!r} missing from SAN {dns_names}"
+    )
