@@ -153,9 +153,18 @@ async def startup(
     port = int(deploy.get("cloud", {}).get("audio_bridge_port", 8765))
 
     if orchestrator_factory is None:
+        from dataclasses import fields as _dc_fields
         from src.orchestrator import Orchestrator
+        from src.voice.asr import ASRConfig, ASRPipeline
+
+        _known_asr_fields = {f.name for f in _dc_fields(ASRConfig)}
+        _asr_overrides = {
+            k: v for k, v in (deploy.get("asr") or {}).items() if k in _known_asr_fields
+        }
+
         def orchestrator_factory() -> Any:
-            return Orchestrator()
+            asr = ASRPipeline(ASRConfig(**_asr_overrides))
+            return Orchestrator(asr=asr)
     orchestrator = orchestrator_factory()
 
     if idle_watcher_factory is None:

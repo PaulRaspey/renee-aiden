@@ -52,7 +52,7 @@ elevenlabs>=2.40.0
 #   sounddevice>=0.4.6
 #   webrtcvad>=2.0.10
 #   opuslib>=3.0.1
-# ASR (M1):
+# ASR (M1 — skeleton code lazy-imports; install on the pod):
 #   faster-whisper>=1.0.0
 # TTS + emotional prosody (M5-M7, GPU-only):
 #   TTS>=0.22.0

@@ -56,18 +56,23 @@ class CloudAudioBridge:
     # -------------------- receive (mic -> ASR pipeline) --------------------
 
     async def _receive_audio(self, ws) -> None:
-        feed: Callable[[bytes], Awaitable[None]] = getattr(
+        feed: Optional[Callable[[bytes], Awaitable[None]]] = getattr(
             self.orchestrator, "feed_audio", None
         )
-        if feed is None:
-            logger.warning("orchestrator has no feed_audio; dropping inbound frames")
-            return
+        warned = False
         async for message in ws:
             if not isinstance(message, (bytes, bytearray)):
                 continue
             pcm = bytes(message)
             if self.idle_watcher is not None:
                 self.idle_watcher.mark_activity()
+            if feed is None:
+                if not warned:
+                    logger.warning(
+                        "orchestrator has no feed_audio; draining inbound frames"
+                    )
+                    warned = True
+                continue
             try:
                 await feed(pcm)
             except Exception:
@@ -78,9 +83,16 @@ class CloudAudioBridge:
     async def _send_audio(self, ws) -> None:
         stream = getattr(self.orchestrator, "tts_output_stream", None)
         if stream is None:
+            # No TTS source yet — keep the task alive until the client
+            # disconnects, otherwise asyncio.gather() in handle_client
+            # returns immediately and the websocket closes.
+            await ws.wait_closed()
             return
-        async for pcm_chunk in stream():
-            await ws.send(pcm_chunk)
+        try:
+            async for pcm_chunk in stream():
+                await ws.send(pcm_chunk)
+        except Exception:
+            logger.exception("tts_output_stream raised")
 
     # -------------------- connection handler --------------------
 
@@ -88,7 +100,24 @@ class CloudAudioBridge:
         receive_task = asyncio.create_task(self._receive_audio(ws))
         send_task = asyncio.create_task(self._send_audio(ws))
         try:
-            await asyncio.gather(receive_task, send_task)
+            # Exit as soon as either side finishes (typically because the
+            # websocket closed). Waiting on gather() would hang forever when
+            # one side is parked on ws.wait_closed() and the other isn't.
+            done, pending = await asyncio.wait(
+                {receive_task, send_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+            for t in pending:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            for t in done:
+                exc = t.exception()
+                if exc is not None:
+                    logger.exception("bridge task raised", exc_info=exc)
         except Exception:
             logger.exception("bridge connection error")
         finally:

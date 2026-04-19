@@ -44,6 +44,18 @@ local:
   gpu: rtx_pro_6000
   audio_bridge: local  # direct sounddevice, no network hop
 
+# ASR pipeline (M1). Model is loaded lazily on first frame, so this block
+# is safe to set even when faster-whisper isn't installed locally.
+asr:
+  model: small.en              # or a path like /workspace/models/whisper-large-v3-turbo
+  device: cuda                 # "cuda" on pod, "cpu" on CPU boxes
+  compute_type: float16        # "int8" on CPU, "float16" on GPU
+  partial_interval_ms: 400
+  silence_finalize_ms: 700
+  silence_rms_threshold: 0.01
+  min_speech_ms: 200
+  beam_size: 1
+
 # Audio bridge settings
 audio:
   sample_rate: 48000

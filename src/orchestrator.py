@@ -21,7 +21,9 @@ Telemetry:
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import random
 import time
 from dataclasses import asdict, dataclass, field
@@ -44,10 +46,14 @@ from .turn_taking.backchannel import (
 )
 from .turn_taking.controller import TickResult, TurnController, TurnState
 from .turn_taking.latency import LatencyPlan
+from .voice.asr import ASRPipeline
 from .voice.prosody import ProsodyContext, ProsodyPlan, ProsodyPlanner
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+logger = logging.getLogger("renee.orchestrator")
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +243,7 @@ class Orchestrator:
         prosody_rules_path: Optional[str | Path] = None,
         injector: Optional[ParalinguisticInjector] = None,
         backchannel: Optional[BackchannelLayer] = None,
+        asr: Optional[ASRPipeline] = None,
     ):
         self.persona_name = persona_name
         self.state_dir = Path(state_dir)
@@ -268,6 +275,12 @@ class Orchestrator:
                 self.injector = ParalinguisticInjector(root, rng=self._rng)
         if self.backchannel is None and self.injector is not None:
             self.backchannel = BackchannelLayer(self.injector.library, rng=self._rng)
+
+        self.asr: Optional[ASRPipeline] = asr
+        if self.asr is not None:
+            self.asr.on_partial = self._on_asr_partial
+            self.asr.on_final = self._on_asr_final
+        self._voice_history: list[dict] = []
 
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
@@ -450,6 +463,47 @@ class Orchestrator:
                 "clip_path": str(bc_event.token.clip_path) if bc_event.token.clip_path else None,
             },
         }
+
+    # ------------------------------------------------------------------
+    # live PCM ingress (M1 ASR + M14 bridge seam)
+    # ------------------------------------------------------------------
+
+    async def feed_audio(self, pcm: bytes) -> None:
+        """Raw 48kHz int16 PCM frames from the cloud audio bridge.
+
+        Delegates to the ASR pipeline when one is configured; drops the
+        frame silently otherwise (the bridge decides whether to drain or
+        log — it should not be this class's problem).
+        """
+        if self.asr is None:
+            return
+        await self.asr.feed_audio(pcm)
+
+    async def _on_asr_partial(self, transcript: str, silence_ms: int) -> None:
+        """ASR partial hook -> turn-taking tick."""
+        try:
+            self.observe_user_audio_tick(transcript, silence_ms=silence_ms)
+        except Exception:
+            logger.exception("observe_user_audio_tick raised on partial")
+
+    async def _on_asr_final(self, transcript: str) -> None:
+        """ASR final hook -> persona turn.
+
+        `text_turn` is synchronous and calls into the LLM router, so we
+        push it to a thread to keep the bridge's event loop responsive.
+        """
+        try:
+            output = await asyncio.to_thread(
+                self.text_turn, transcript, list(self._voice_history),
+            )
+        except Exception:
+            logger.exception("text_turn raised on final")
+            return
+        self._voice_history.append({"role": "user", "content": transcript})
+        self._voice_history.append({"role": "assistant", "content": output.text})
+        # keep the rolling history bounded
+        if len(self._voice_history) > 40:
+            self._voice_history = self._voice_history[-40:]
 
     def begin_renee_preparing(self) -> None:
         self.turn_controller.begin_renee_preparing()
