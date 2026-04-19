@@ -191,9 +191,11 @@ def cmd_proxy(args) -> int:
     if args.https:
         try:
             from src.client.cert_manager import ensure_self_signed_cert
+            from src.client.proxy_server import tailscale_ip
 
             cert_dir = REPO_ROOT / "state" / "certs"
-            ssl_context = ensure_self_signed_cert(cert_dir)
+            extra = [ip for ip in [tailscale_ip()] if ip]
+            ssl_context = ensure_self_signed_cert(cert_dir, extra_hosts=extra)
         except Exception as e:
             print(f"HTTPS setup failed ({e}); falling back to HTTP", file=sys.stderr)
             ssl_context = None

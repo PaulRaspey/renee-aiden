@@ -368,3 +368,37 @@ def unused_tcp_port():
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+# -------------------------- QR rendering -----------------------------
+
+
+def test_render_qr_ascii_returns_nonempty_block_for_url():
+    qr = ps.render_qr_ascii("http://100.64.0.5:8766/")
+    assert qr, "qr renderer returned empty string with qrcode installed"
+    lines = qr.strip().splitlines()
+    # The square QR matrix must produce the same number of rows as columns
+    # (each module renders as two characters, so row-chars == 2 * cols).
+    assert len(lines) >= 15
+    for ln in lines:
+        assert len(ln) == 2 * len(lines)
+
+
+def test_render_qr_ascii_is_plain_ascii():
+    """Must be cp1252-safe so Windows consoles don't choke on output."""
+    qr = ps.render_qr_ascii("http://x/")
+    qr.encode("ascii")  # would raise UnicodeEncodeError on a half-block fallback
+
+
+def test_render_qr_ascii_returns_empty_when_qrcode_missing(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_qrcode(name, *a, **kw):
+        if name == "qrcode":
+            raise ImportError("simulated missing")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_qrcode)
+    assert ps.render_qr_ascii("http://x/") == ""

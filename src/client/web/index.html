@@ -377,9 +377,28 @@
     startBtn.addEventListener("click", unlockAndStart);
 
     // Keep the tab awake on some browsers by reacting to visibility changes.
+    // On iOS Safari a screen lock can silently close the websocket; when the
+    // user unlocks and brings the tab forward we reconnect immediately
+    // instead of waiting for the next exponential-backoff tick.
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && ws && ws.readyState === WebSocket.CLOSED) connectWS();
+      if (document.hidden) return;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        reconnectDelay = 1000;
+        connectWS();
+      }
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
     });
+
+    // Request a wake lock when available so the screen doesn't sleep
+    // while Renée is active. Silent no-op on browsers that don't support it.
+    (async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          await navigator.wakeLock.request("screen");
+        }
+      } catch (_) {}
+    })();
   })();
   </script>
 </body>

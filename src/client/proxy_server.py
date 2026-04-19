@@ -368,5 +368,31 @@ def _print_connect_urls(urls: list[str]) -> None:
     primary = urls[0] if urls else ""
     if primary:
         print(f"Open on your phone: {primary}")
+        qr_ascii = render_qr_ascii(primary)
+        if qr_ascii:
+            print(qr_ascii)
     for extra in urls[1:]:
         print(f"                 or: {extra}")
+
+
+def render_qr_ascii(url: str) -> str:
+    """Return a QR code rendered with plain 7-bit ASCII characters (``##``
+    for a dark module, two spaces for a light one).
+
+    Half-block Unicode renderings look better in the terminal but fail on
+    Windows ``cp1252`` consoles, so we keep the output ASCII-clean and
+    trade density for portability. Returns an empty string if ``qrcode``
+    isn't installed.
+    """
+    try:
+        import qrcode  # lazy
+    except ImportError:
+        return ""
+
+    qr = qrcode.QRCode(border=2, box_size=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    lines: list[str] = []
+    for row in qr.modules:
+        lines.append("".join("##" if m else "  " for m in row))
+    return "\n".join(lines) + "\n"
