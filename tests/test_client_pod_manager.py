@@ -42,6 +42,27 @@ def test_bridge_url_template_uses_configured_port():
     assert settings.bridge_url_template.format(host="1.2.3.4") == "ws://1.2.3.4:9000"
 
 
+def test_bridge_url_template_prefers_external_port():
+    settings = DeploymentSettings(
+        mode="cloud", pod_id="abc",
+        region="US-TX",
+        audio_bridge_port=8765,
+        eval_dashboard_port=7860,
+        idle_shutdown_minutes=60,
+        audio_bridge_port_external=10287,
+    )
+    assert settings.bridge_url_template.format(host="1.2.3.4") == "ws://1.2.3.4:10287"
+
+
+def test_load_deployment_reads_external_port(monkeypatch):
+    monkeypatch.delenv("RENEE_POD_ID", raising=False)
+    settings = load_deployment(ROOT / "configs" / "deployment.yaml")
+    # Shipped config maps internal 8765 -> public 10287; the template must
+    # dial the public one or the OptiPlex client gets ConnectionRefused.
+    assert settings.audio_bridge_port_external == 10287
+    assert settings.bridge_url_template.format(host="1.2.3.4") == "ws://1.2.3.4:10287"
+
+
 class FakeRunpod:
     def __init__(self):
         # Matches the real runpod.get_pod() dict shape.

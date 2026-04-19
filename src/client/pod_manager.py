@@ -37,16 +37,21 @@ class DeploymentSettings:
     audio_bridge_port: int
     eval_dashboard_port: int
     idle_shutdown_minutes: int
+    # RunPod maps the container's audio_bridge_port to a different public TCP
+    # port. None means "no NAT, dial the internal port directly" (local dev).
+    audio_bridge_port_external: Optional[int] = None
 
     @property
     def bridge_url_template(self) -> str:
-        return f"ws://{{host}}:{self.audio_bridge_port}"
+        port = self.audio_bridge_port_external or self.audio_bridge_port
+        return f"ws://{{host}}:{port}"
 
 
 def load_deployment(path: str | Path = DEFAULT_DEPLOY_CONFIG) -> DeploymentSettings:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     cloud = raw.get("cloud") or {}
     pod_id = os.environ.get("RENEE_POD_ID") or cloud.get("pod_id", "")
+    external_raw = cloud.get("audio_bridge_port_external")
     return DeploymentSettings(
         mode=str(raw.get("mode", "cloud")),
         pod_id=str(pod_id or ""),
@@ -54,6 +59,7 @@ def load_deployment(path: str | Path = DEFAULT_DEPLOY_CONFIG) -> DeploymentSetti
         audio_bridge_port=int(cloud.get("audio_bridge_port", 8765)),
         eval_dashboard_port=int(cloud.get("eval_dashboard_port", 7860)),
         idle_shutdown_minutes=int(cloud.get("idle_shutdown_minutes", 60)),
+        audio_bridge_port_external=int(external_raw) if external_raw is not None else None,
     )
 
 
