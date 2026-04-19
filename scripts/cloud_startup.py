@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,12 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Make `import src.*` work without the pod's shell needing PYTHONPATH set —
+# cloud_startup is launched with `python /workspace/renee-aiden/scripts/cloud_startup.py`
+# and Python's default sys.path wouldn't otherwise include /workspace/renee-aiden.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 try:
     from dotenv import load_dotenv
@@ -112,11 +119,21 @@ async def _restore_state(state_dir: Path) -> None:
 
 async def _run_self_test(orchestrator: Any) -> None:
     # Exercise the pipeline once so a degraded GPU surface shows up in logs
-    # instead of on the first user turn.
+    # instead of on the first user turn. Routes through the same LLMRouter
+    # the real system uses — Groq-preferred, with graceful Ollama fallback
+    # if the local daemon isn't there.
     try:
-        orchestrator.text_turn("system: self-test ping")
+        output = await asyncio.to_thread(
+            orchestrator.text_turn, "system: self-test ping"
+        )
     except Exception:
         logger.exception("self-test turn failed (non-fatal)")
+        return
+    backend = getattr(getattr(output, "telemetry", None), "persona_backend", "?")
+    logger.info(
+        "self-test ok: backend=%s chars=%d",
+        backend, len(output.text or ""),
+    )
 
 
 # -------------------- orchestration --------------------
