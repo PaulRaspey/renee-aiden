@@ -286,6 +286,11 @@ class Orchestrator:
         self.tts: Optional[TTSPipeline] = tts
         self._voice_history: list[dict] = []
 
+        # Optional async callable set by the audio bridge: receives dict
+        # messages like {"type": "transcript", "speaker": "paul", "text": ...}
+        # and forwards them to the connected client. None = no sink.
+        self.transcript_emitter: Optional[Any] = None
+
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -504,6 +509,9 @@ class Orchestrator:
         After the reply lands, hand it to the TTS pipeline which
         enqueues PCM chunks for the bridge to send.
         """
+        await self._emit_transcript(
+            {"type": "transcript", "speaker": "paul", "text": transcript}
+        )
         try:
             output = await asyncio.to_thread(
                 self.text_turn, transcript, list(self._voice_history),
@@ -517,11 +525,27 @@ class Orchestrator:
         if len(self._voice_history) > 40:
             self._voice_history = self._voice_history[-40:]
 
+        if output.text:
+            await self._emit_transcript(
+                {"type": "response", "speaker": "renee", "text": output.text}
+            )
         if self.tts is not None and output.text:
             try:
                 await self.tts.speak(output.text)
             except Exception:
                 logger.exception("tts.speak raised")
+
+    async def _emit_transcript(self, msg: dict) -> None:
+        """Forward a transcript/response event to the bridge client, if one
+        is connected. Swallows exceptions: transcript display is a nice-to-
+        have and must never break the turn pipeline."""
+        emitter = getattr(self, "transcript_emitter", None)
+        if emitter is None:
+            return
+        try:
+            await emitter(msg)
+        except Exception:
+            logger.debug("transcript_emitter raised", exc_info=True)
 
     async def greet_on_connect(
         self, prompt: str = "system: greet paul, he just connected"
@@ -541,6 +565,10 @@ class Orchestrator:
             logger.exception("greet_on_connect: text_turn raised")
             return
         self._voice_history.append({"role": "assistant", "content": output.text})
+        if output.text:
+            await self._emit_transcript(
+                {"type": "response", "speaker": "renee", "text": output.text}
+            )
         if self.tts is not None and output.text:
             try:
                 await self.tts.speak(output.text)

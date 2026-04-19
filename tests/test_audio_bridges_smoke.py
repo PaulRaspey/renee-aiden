@@ -105,3 +105,51 @@ async def test_handle_client_stays_open_with_bare_orchestrator():
     assert not task.done(), "handler closed the connection prematurely"
     ws.close()
     await asyncio.wait_for(task, timeout=1.0)
+
+
+class EmitterOrchestrator:
+    """Minimal orchestrator that exposes a transcript_emitter slot.
+
+    Deliberately omits tts_output_stream so _send_audio parks on
+    ws.wait_closed() instead of exiting immediately on an empty stream.
+    """
+
+    def __init__(self):
+        self.transcript_emitter = None
+
+    async def feed_audio(self, pcm: bytes) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_handle_client_installs_transcript_emitter_for_connection():
+    """The bridge must install an emitter on connect and clear it on disconnect."""
+    import json
+
+    orch = EmitterOrchestrator()
+    bridge = CloudAudioBridge(orch)
+    ws = FakeWebSocket([])
+    task = asyncio.create_task(bridge.handle_client(ws))
+    # Let handle_client install the emitter before we test it.
+    await asyncio.sleep(0.02)
+    assert callable(orch.transcript_emitter), "emitter not installed"
+
+    # Invoking the emitter sends a JSON text frame over the websocket.
+    sent: list = []
+    orig_send = ws.send
+
+    async def capture(data):
+        sent.append(data)
+        await orig_send(data)
+
+    ws.send = capture  # type: ignore[assignment]
+    await orch.transcript_emitter(
+        {"type": "transcript", "speaker": "paul", "text": "hello"}
+    )
+    assert sent and sent[0] == json.dumps(
+        {"type": "transcript", "speaker": "paul", "text": "hello"}
+    )
+
+    ws.close()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert orch.transcript_emitter is None, "emitter not cleared on disconnect"

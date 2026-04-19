@@ -413,3 +413,48 @@ def test_orchestrator_without_library_still_runs(tmp_state: Path):
     # No library -> no backchannel layer either
     tick = orch.observe_user_audio_tick("Hey", silence_ms=50)
     assert tick["backchannel"] is None
+
+
+# ---------------------------------------------------------------------------
+# transcript emitter (mobile client relay)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_asr_final_emits_user_transcript_and_renee_response(
+    orchestrator: Orchestrator,
+):
+    sent: list[dict] = []
+
+    async def emitter(msg: dict) -> None:
+        sent.append(msg)
+
+    orchestrator.transcript_emitter = emitter
+    await orchestrator._on_asr_final("what's up")
+
+    types = [m["type"] for m in sent]
+    assert "transcript" in types and "response" in types
+    user = [m for m in sent if m["type"] == "transcript"][0]
+    assert user == {"type": "transcript", "speaker": "paul", "text": "what's up"}
+    renee = [m for m in sent if m["type"] == "response"][0]
+    assert renee["speaker"] == "renee"
+    assert renee["text"]
+
+
+@pytest.mark.asyncio
+async def test_on_asr_final_with_no_emitter_does_not_raise(
+    orchestrator: Orchestrator,
+):
+    orchestrator.transcript_emitter = None
+    # Must not raise — transcript relay is best-effort.
+    await orchestrator._on_asr_final("hello")
+
+
+@pytest.mark.asyncio
+async def test_emitter_exception_does_not_break_turn(orchestrator: Orchestrator):
+    async def bad_emitter(_msg):
+        raise RuntimeError("network down")
+
+    orchestrator.transcript_emitter = bad_emitter
+    # Should still finish the turn cleanly despite the emitter blowing up.
+    await orchestrator._on_asr_final("hey")

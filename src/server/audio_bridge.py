@@ -17,6 +17,7 @@ Wire with:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
@@ -101,6 +102,19 @@ class CloudAudioBridge:
     # -------------------- connection handler --------------------
 
     async def handle_client(self, ws, path: str = "") -> None:
+        # Install a transcript emitter on the orchestrator for the life of
+        # this connection so the mobile client can show what was said and
+        # what Renée responded. Binary frames are PCM; text frames are JSON.
+        async def _emit(msg: dict) -> None:
+            try:
+                await ws.send(json.dumps(msg))
+            except Exception:
+                logger.debug("transcript emit failed", exc_info=True)
+
+        prior_emitter = getattr(self.orchestrator, "transcript_emitter", None)
+        if hasattr(self.orchestrator, "transcript_emitter"):
+            self.orchestrator.transcript_emitter = _emit
+
         receive_task = asyncio.create_task(self._receive_audio(ws))
         send_task = asyncio.create_task(self._send_audio(ws))
         greeting_task: Optional[asyncio.Task] = None
@@ -137,6 +151,8 @@ class CloudAudioBridge:
                     t.cancel()
             if greeting_task is not None and not greeting_task.done():
                 greeting_task.cancel()
+            if hasattr(self.orchestrator, "transcript_emitter"):
+                self.orchestrator.transcript_emitter = prior_emitter
 
     # -------------------- lifecycle --------------------
 

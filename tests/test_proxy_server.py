@@ -303,3 +303,68 @@ def test_format_connect_urls_falls_back_to_localhost(monkeypatch):
     monkeypatch.setattr(ps, "local_ips", lambda: [])
     urls = ps.format_connect_urls(8766)
     assert urls == ["http://localhost:8766/"]
+
+
+# -------------------------- live server smoke -------------------------
+
+
+@pytest.mark.asyncio
+async def test_live_server_serves_static_files(tmp_path: Path, unused_tcp_port: int):
+    """End-to-end: bind a real port, fetch /, /manifest.json, /sw.js, and /missing."""
+    import urllib.request
+    import urllib.error
+
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<html>renee</html>", encoding="utf-8")
+    (web / "manifest.json").write_text('{"name":"R"}', encoding="utf-8")
+    (web / "sw.js").write_text("/*sw*/", encoding="utf-8")
+
+    from websockets.asyncio.server import serve
+
+    async def ws_handler(ws):
+        await ws.wait_closed()
+
+    process_request = ps.make_process_request(web)
+    async with serve(
+        ws_handler,
+        "127.0.0.1",
+        unused_tcp_port,
+        process_request=process_request,
+    ):
+        base = f"http://127.0.0.1:{unused_tcp_port}"
+
+        def fetch(path: str) -> tuple[int, bytes, str]:
+            req = urllib.request.Request(base + path)
+            try:
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    return resp.status, resp.read(), resp.headers.get("Content-Type", "")
+            except urllib.error.HTTPError as e:
+                return e.code, e.read(), e.headers.get("Content-Type", "")
+
+        status, body, ctype = await asyncio.to_thread(fetch, "/")
+        assert status == 200
+        assert body == b"<html>renee</html>"
+        assert "text/html" in ctype
+
+        status, body, _ = await asyncio.to_thread(fetch, "/manifest.json")
+        assert status == 200
+        assert body == b'{"name":"R"}'
+
+        status, body, ctype = await asyncio.to_thread(fetch, "/sw.js")
+        assert status == 200
+        assert ctype == "application/javascript"
+
+        status, _, _ = await asyncio.to_thread(fetch, "/does-not-exist")
+        assert status == 404
+
+
+@pytest.fixture
+def unused_tcp_port():
+    import socket as _s
+
+    s = _s.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
