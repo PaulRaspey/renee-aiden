@@ -22,6 +22,7 @@ Telemetry:
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import logging
 import random
@@ -289,6 +290,11 @@ class Orchestrator:
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
+        # Human-readable conversation log, one file per local day. Used by
+        # Paul to skim the overnight transcript without digging through the
+        # telemetry JSONL.
+        self._conversation_log_dir = self.state_dir / "logs" / "conversations"
+
     def _default_library_root(self) -> Path:
         return REPO_ROOT / "paralinguistics" / self.persona_name
 
@@ -386,6 +392,7 @@ class Orchestrator:
             injections_count=len(injections),
             paralinguistic_count=prosody_plan.paralinguistic_count(),
         )
+        self._append_conversation_log(user_text=user_text, response_text=response_text)
 
         return TurnOutput(
             text=response_text,
@@ -570,4 +577,30 @@ class Orchestrator:
                 f.write(json.dumps(payload, default=str) + "\n")
         except Exception:
             # telemetry must never break a turn
+            pass
+
+    def _append_conversation_log(self, *, user_text: str, response_text: str) -> None:
+        """Append a single exchange to today's conversation log.
+
+        File: {state_dir}/logs/conversations/YYYY-MM-DD.log
+        Format:
+            [HH:MM:SS] PAUL: ...
+            [HH:MM:SS] RENEE: ...
+        """
+        try:
+            now = _dt.datetime.now()
+            path = self._conversation_log_dir / f"{now.strftime('%Y-%m-%d')}.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            stamp = now.strftime("%H:%M:%S")
+            speaker = self.persona_name.upper() or "RENEE"
+            lines = []
+            if user_text:
+                lines.append(f"[{stamp}] PAUL: {user_text.strip()}")
+            if response_text:
+                lines.append(f"[{stamp}] {speaker}: {response_text.strip()}")
+            if lines:
+                with path.open("a", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+        except Exception:
+            # logging must never break a turn
             pass
