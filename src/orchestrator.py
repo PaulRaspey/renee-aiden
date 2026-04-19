@@ -48,6 +48,7 @@ from .turn_taking.controller import TickResult, TurnController, TurnState
 from .turn_taking.latency import LatencyPlan
 from .voice.asr import ASRPipeline
 from .voice.prosody import ProsodyContext, ProsodyPlan, ProsodyPlanner
+from .voice.tts import TTSPipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -244,6 +245,7 @@ class Orchestrator:
         injector: Optional[ParalinguisticInjector] = None,
         backchannel: Optional[BackchannelLayer] = None,
         asr: Optional[ASRPipeline] = None,
+        tts: Optional[TTSPipeline] = None,
     ):
         self.persona_name = persona_name
         self.state_dir = Path(state_dir)
@@ -280,6 +282,7 @@ class Orchestrator:
         if self.asr is not None:
             self.asr.on_partial = self._on_asr_partial
             self.asr.on_final = self._on_asr_final
+        self.tts: Optional[TTSPipeline] = tts
         self._voice_history: list[dict] = []
 
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
@@ -487,10 +490,12 @@ class Orchestrator:
             logger.exception("observe_user_audio_tick raised on partial")
 
     async def _on_asr_final(self, transcript: str) -> None:
-        """ASR final hook -> persona turn.
+        """ASR final hook -> persona turn -> TTS.
 
         `text_turn` is synchronous and calls into the LLM router, so we
         push it to a thread to keep the bridge's event loop responsive.
+        After the reply lands, hand it to the TTS pipeline which
+        enqueues PCM chunks for the bridge to send.
         """
         try:
             output = await asyncio.to_thread(
@@ -504,6 +509,26 @@ class Orchestrator:
         # keep the rolling history bounded
         if len(self._voice_history) > 40:
             self._voice_history = self._voice_history[-40:]
+
+        if self.tts is not None and output.text:
+            try:
+                await self.tts.speak(output.text)
+            except Exception:
+                logger.exception("tts.speak raised")
+
+    async def tts_output_stream(self):
+        """Async generator consumed by CloudAudioBridge._send_audio.
+
+        When TTS is configured, yields 20ms PCM frames at the bridge's
+        wire sample rate. When it isn't, parks on a never-set Event so
+        the bridge's send task doesn't exit early and tear down the
+        websocket — cancellation from handle_client cleans this up.
+        """
+        if self.tts is None:
+            await asyncio.Event().wait()
+            return
+        async for chunk in self.tts.stream():
+            yield chunk
 
     def begin_renee_preparing(self) -> None:
         self.turn_controller.begin_renee_preparing()

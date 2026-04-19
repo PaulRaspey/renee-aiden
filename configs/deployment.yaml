@@ -56,6 +56,20 @@ asr:
   min_speech_ms: 200
   beam_size: 1
 
+# TTS pipeline (M5 send path).
+# voice_id + api key come from .env (RENEE_VOICE_ID, ELEVENLABS_API_KEY);
+# this block tunes synthesis only. TTS is skipped on startup when either
+# env var is missing.
+tts:
+  model_id: eleven_multilingual_v2
+  stability: 0.5
+  similarity_boost: 0.85
+  style: 0.2
+  use_speaker_boost: true
+  eleven_sample_rate: 22050    # ElevenLabs output_format=pcm_22050
+  output_sample_rate: 48000    # wire/client playback rate — bridge resamples
+  frame_size_ms: 20
+
 # Audio bridge settings
 audio:
   sample_rate: 48000

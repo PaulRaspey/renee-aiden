@@ -32,6 +32,15 @@ from typing import Any, Callable, Optional
 import yaml
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(REPO_ROOT / ".env")
+except ImportError:  # pragma: no cover
+    pass
+
+
 logger = logging.getLogger("renee.startup")
 
 
@@ -156,15 +165,34 @@ async def startup(
         from dataclasses import fields as _dc_fields
         from src.orchestrator import Orchestrator
         from src.voice.asr import ASRConfig, ASRPipeline
+        from src.voice.tts import TTSConfig, TTSPipeline
 
         _known_asr_fields = {f.name for f in _dc_fields(ASRConfig)}
         _asr_overrides = {
             k: v for k, v in (deploy.get("asr") or {}).items() if k in _known_asr_fields
         }
 
+        _voice_id = os.environ.get("RENEE_VOICE_ID")
+        _has_eleven_key = bool(os.environ.get("ELEVENLABS_API_KEY"))
+        _known_tts_fields = {f.name for f in _dc_fields(TTSConfig)}
+        _tts_overrides = {
+            k: v for k, v in (deploy.get("tts") or {}).items() if k in _known_tts_fields
+        }
+
         def orchestrator_factory() -> Any:
             asr = ASRPipeline(ASRConfig(**_asr_overrides))
-            return Orchestrator(asr=asr)
+            tts = None
+            if _voice_id and _has_eleven_key:
+                tts = TTSPipeline(TTSConfig(voice_id=_voice_id, **_tts_overrides))
+            elif _voice_id or _has_eleven_key:
+                logger.warning(
+                    "TTS partially configured: RENEE_VOICE_ID=%s, "
+                    "ELEVENLABS_API_KEY=%s — both must be set to enable TTS.",
+                    bool(_voice_id), _has_eleven_key,
+                )
+            else:
+                logger.info("TTS disabled (RENEE_VOICE_ID / ELEVENLABS_API_KEY not set).")
+            return Orchestrator(asr=asr, tts=tts)
     orchestrator = orchestrator_factory()
 
     if idle_watcher_factory is None:
