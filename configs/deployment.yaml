@@ -98,16 +98,22 @@ models:
   endpointer: models/endpointer
   backchannel: models/backchannel
 
-# Cloud LLM routing (supplements local models)
+# Cloud LLM routing (supplements local models).
+# NOTE (drift watch): src/persona/llm_router.py currently reads GROQ_MODEL,
+# OLLAMA_MODEL, and ANTHROPIC_MODEL from the environment, not this block.
+# The values below are informational; set GROQ_MODEL/etc. in .env to
+# override. When we wire yaml-driven routing, keep the defaults here in
+# sync with the router's fallbacks (qwen/qwen3-32b, gemma4:e4b,
+# claude-sonnet-4-5).
 cloud_llm:
   groq:
-    model: qwen-3-32b
+    model: qwen/qwen3-32b
     key_env: GROQ_API_KEY
     use_for: fast_turns
     max_latency_ms: 300
-  
+
   anthropic:
-    model: claude-sonnet-4-6
+    model: claude-sonnet-4-5
     key_env: ANTHROPIC_API_KEY
     use_for: deep_reasoning
     max_latency_ms: 800

@@ -131,6 +131,22 @@ class LLMRouter:
             return "ollama"
         return "anthropic"
 
+    def _available_backends(self, preferred: Backend) -> list[Backend]:
+        """Return the fallback chain for this call: preferred first, then
+        the other configured backends in priority order. ``ollama`` drops
+        to last because on the pod it is typically unreachable; on the
+        OptiPlex a cascade from groq to ollama still buys a local option
+        when the cloud hiccups."""
+        order: list[Backend] = [preferred]
+        for b in ("groq", "anthropic", "ollama"):
+            if b in order:
+                continue
+            client_attr = {"groq": "groq_client", "anthropic": "anthropic_client",
+                           "ollama": "ollama_client"}[b]
+            if getattr(self, client_attr) is not None:
+                order.append(b)  # type: ignore[arg-type]
+        return order
+
     def generate(
         self,
         system_prompt: str,
@@ -139,10 +155,55 @@ class LLMRouter:
         temperature: float = 0.85,
         max_tokens: int = 400,
         user_text: str | None = None,
+        allow_fallback: bool = True,
     ) -> LLMResponse:
         if backend is None:
             backend = self.decide_backend(user_text or "", "normal")
 
+        if not allow_fallback:
+            return self._generate_one(
+                backend, system_prompt, messages, temperature, max_tokens,
+            )
+
+        t0 = time.time()
+        errors: list[tuple[Backend, Exception]] = []
+        for b in self._available_backends(backend):
+            try:
+                resp = self._generate_one(
+                    b, system_prompt, messages, temperature, max_tokens,
+                )
+                if errors:
+                    logger.warning(
+                        "backend %s succeeded after %d earlier failures: %s",
+                        b, len(errors),
+                        [(eb, type(ex).__name__) for eb, ex in errors],
+                    )
+                return resp
+            except Exception as e:
+                errors.append((b, e))
+                logger.warning(
+                    "backend %s failed (%s: %s); trying next",
+                    b, type(e).__name__, e,
+                )
+        # Every backend failed or none was configured. Fall back to a
+        # canned response rather than raising so the conversation turn
+        # stays coherent instead of crashing the pipeline.
+        logger.error("all LLM backends failed; serving canned response")
+        return LLMResponse(
+            text=OLLAMA_UNAVAILABLE_FALLBACK,
+            backend=backend,
+            model="fallback",
+            latency_ms=(time.time() - t0) * 1000,
+        )
+
+    def _generate_one(
+        self,
+        backend: Backend,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMResponse:
         t0 = time.time()
         if backend == "groq":
             if self.groq_client is None:
@@ -188,39 +249,18 @@ class LLMRouter:
 
         if backend == "ollama":
             if self.ollama_client is None:
-                logger.warning(
-                    "Ollama backend requested but ollama package not installed; "
-                    "returning fallback response."
-                )
-                return LLMResponse(
-                    text=OLLAMA_UNAVAILABLE_FALLBACK,
-                    backend="ollama",
-                    model=self.ollama_model,
-                    latency_ms=(time.time() - t0) * 1000,
-                )
+                raise RuntimeError("Ollama backend not installed")
             full = [{"role": "system", "content": system_prompt}] + messages
-            try:
-                resp = self.ollama_client.chat(
-                    model=self.ollama_model,
-                    messages=full,
-                    options={"temperature": temperature, "num_predict": max_tokens},
-                )
-            except Exception as e:
-                # Ollama's client raises ConnectionError/httpx.ConnectError when
-                # the local daemon isn't running. Rather than letting that
-                # bubble up as a traceback in the conversation log, degrade
-                # gracefully with a fixed response so the user hears something
-                # coherent while the ops side gets fixed.
-                logger.warning(
-                    "Ollama backend unavailable (%s: %s); returning fallback response.",
-                    type(e).__name__, e,
-                )
-                return LLMResponse(
-                    text=OLLAMA_UNAVAILABLE_FALLBACK,
-                    backend="ollama",
-                    model=self.ollama_model,
-                    latency_ms=(time.time() - t0) * 1000,
-                )
+            # Ollama connection/OOM errors bubble up so the cascade in
+            # generate() can try Groq/Anthropic. The canned response
+            # below was the old behaviour; we moved it into the cascade's
+            # last-resort path instead so a transient Gemma OOM no longer
+            # locks the user into "I'm having trouble thinking".
+            resp = self.ollama_client.chat(
+                model=self.ollama_model,
+                messages=full,
+                options={"temperature": temperature, "num_predict": max_tokens},
+            )
             latency = (time.time() - t0) * 1000
             text = resp.get("message", {}).get("content", "") or ""
             return LLMResponse(

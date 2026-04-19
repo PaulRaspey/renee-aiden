@@ -13,7 +13,7 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 **Next milestone:** UAHP/QAL/Groq fallback/deployment.yaml drift sweep, then M15 long-running test.
 **Blockers:** Phone-side manual cert trust is the only step a test cannot script. See "Blocked on Paul" at the bottom if present.
 
-**Test summary:** 378 tests passing with 3 DeprecationWarnings from the websockets shim. 4 pre-existing memory tests still fail on HuggingFace network access only.
+**Test summary:** 392 tests passing with 3 DeprecationWarnings from the websockets shim. 4 pre-existing memory tests still fail on HuggingFace network access only.
 
 ## How to resume
 
@@ -90,9 +90,29 @@ Incidental fixes:
 - `src/orchestrator.py`: replaced the single `transcript_emitter` slot with a `{conn_id: cb}` dict plus `register_transcript_listener` / `transcript_listener_count`. The legacy `transcript_emitter` attribute is preserved as a property so existing tests and `cloud_startup.py` keep working; it falls through the fan-out last.
 - `src/server/audio_bridge.py`: `handle_client` now registers the emitter via the new API (keyed on `id(ws)`) and calls `unregister()` in `finally`, so the orchestrator holds no reference to a dead socket after disconnect.
 
+### Step 9: UAHP identity + receipt hardening
+Verified 2026-04-18 on matrix.
+Exercised: sign/verify roundtrip, cross-identity rejection (A's signature does not verify under B), tamper rejection (mutating input_hash breaks the signature), unique receipt_ids + monotone timestamps across back-to-back signings.
+Incidental fixes: none.
+Deferred: heartbeats, signed death certificates, QAL attestation chain, and a replay ledger. The architecture doc (`architecture/07_uahp_integration.md`) calls for all four, but the code ships only HMAC sign/verify + receipts today. These are Paul-scoped design items, not drift. Added to "Blocked on Paul".
+
+### Step 10: LLM router cascade fallback
+Verified 2026-04-18 on matrix.
+Exercised: cascade from a failing Ollama backend to a healthy Groq backend in a single generate() call; assert the response comes back under one second in the fake-client harness. Cascade to a canned response only when every configured backend fails. `allow_fallback=False` preserves the raise-on-failure path for callers that want to control retries themselves.
+Incidental fixes:
+- `src/persona/llm_router.py`: factored `_generate_one` out of `generate`, added `_available_backends` ordering, and a cascade loop. The old inline "canned Ollama fallback" was moved to the all-backends-failed path so a single Ollama connection error no longer locks the user into "I'm having trouble thinking".
+- `src/persona/llm_router.py`: Ollama path now raises `ConnectionError` rather than swallowing it, so the cascade can pick up.
+
+### Step 11: deployment.yaml drift sweep
+Verified 2026-04-18 on matrix.
+Exercised: contract test that walks every cloud.* key load_deployment/cmd_proxy reads and asserts it lives in the shipped yaml with a sane type. Also asserts `cloud_llm.groq.model` and `cloud_llm.anthropic.model` match the router's current hard-coded fallbacks.
+Incidental fixes:
+- `configs/deployment.yaml`: `cloud_llm.groq.model` was `qwen-3-32b` but `LLMRouter` defaults to `qwen/qwen3-32b`. Changed the yaml to match. Same for `cloud_llm.anthropic.model` (`claude-sonnet-4-6` -> `claude-sonnet-4-5`). Added a drift-watch note explaining that the router reads env vars, not this block, so the values are informational until yaml-driven routing lands.
+
 ### Deferred
 
 - Two-tailnet-node live check: Paul opens `https://100.78.253.97:8766/` on his phone, accepts the cert, then installs the CA from `/cert`. I print the URL and the QR; this is the one step that cannot be scripted from the OptiPlex.
+- Dead config keys in `configs/deployment.yaml` (no current consumer): `cloud.daily_spend_alert_usd`, `cloud.monthly_budget_usd`, `cloud.pod_template`, `cloud.gpu_type`, `cloud.volume_name`, `cloud.volume_size_gb`, `audio.codec`, `audio.opus_*`, `audio.input_device`, `audio.output_device`, `models.persona_*`, `models.endpointer`, `models.backchannel`, `startup.self_test_timeout_s`, all of `backup.*`. These look aspirational (billing alerts, Opus on the wire, backup cron). Prune or wire up as features land; keeping for now since they document the target shape.
 
 ---
 
@@ -125,6 +145,8 @@ Incidental fixes:
 ## Blocked on Paul
 
 - Phone-side install of the self-signed CA from `https://<matrix-tailscale>:8766/cert`. No way to script; requires tapping "Install" in iOS Safari then "Trust" in Settings, General, About, Certificate Trust Settings.
+- Do you want Gemma-primary routing or the current Groq-primary? The meta-harness said "Primary local model Gemma 4 E4B on T400, fallback Qwen 3 32B via Groq API". `decide_backend` currently returns `"groq"` whenever the Groq key is set. Flipping it to Gemma-primary on the OptiPlex is one `if` change; the cascade fallback I just added handles Gemma going offline. Leaving as Groq-primary until you confirm.
+- UAHP feature gap: `architecture/07_uahp_integration.md` calls for heartbeats, signed death certificates, a supervising agent, replay-detection ledger, and QAL attestation. None of these ship today. Do we build them into M15 or defer until post-launch?
 
 ## Known risks / gotchas
 
