@@ -20,7 +20,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import yaml
 
@@ -28,8 +28,10 @@ from .ab import ABQueue
 from .callbacks import CallbackTracker
 from .scorers import TurnScores, score_turn
 from ..memory import MemoryStore
-from ..orchestrator import Orchestrator
-from ..persona.core import PersonaCore
+
+if TYPE_CHECKING:
+    from ..orchestrator import Orchestrator
+    from ..persona.core import PersonaCore
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -143,7 +145,7 @@ class EvalStore:
 class EvalHarness:
     def __init__(
         self,
-        orchestrator: Orchestrator,
+        orchestrator: "Orchestrator",
         *,
         eval_store: Optional[EvalStore] = None,
         ab_queue: Optional[ABQueue] = None,
@@ -348,6 +350,12 @@ def main() -> int:
         )
         print(f"wrote {out}")
         return 0
+
+    # Local imports: see TYPE_CHECKING block — eval.__init__ eagerly loads
+    # this module, so top-level Orchestrator/PersonaCore imports would cycle
+    # through persona.core → eval.metrics → eval.__init__ → harness.
+    from ..orchestrator import Orchestrator
+    from ..persona.core import PersonaCore
 
     memory = MemoryStore(persona_name=args.persona, state_dir=state_dir)
     core = PersonaCore(
