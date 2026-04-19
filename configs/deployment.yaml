@@ -17,6 +17,11 @@ cloud:
   audio_bridge_port: 8765                # internal (container) port
   audio_bridge_port_external: 10287      # public TCP port mapped by RunPod; what the OptiPlex connects to
   eval_dashboard_port: 7860
+
+  # OptiPlex-side mobile proxy (PWA over Tailscale). Phone browser hits
+  # this port on the OptiPlex's Tailscale IP; the proxy relays audio and
+  # transcripts to/from audio_bridge_port_external above.
+  proxy_port: 8766
   
   # Auto-shutdown after N minutes of silence (no audio input)
   idle_shutdown_minutes: 60

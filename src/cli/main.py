@@ -61,6 +61,27 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("eval", help="run the eval harness")
     sub.add_parser("check-deps", help="report which optional audio/cloud deps are missing")
 
+    proxy_p = sub.add_parser(
+        "proxy",
+        help="serve the mobile PWA (phone browser -> proxy -> bridge)",
+    )
+    proxy_p.add_argument(
+        "--port", type=int, default=None,
+        help="proxy port (default: cloud.proxy_port in deployment.yaml or 8766)",
+    )
+    proxy_p.add_argument(
+        "--bridge-url", default=None,
+        help="override bridge URL (skips pod status lookup)",
+    )
+    proxy_p.add_argument(
+        "--no-browser", action="store_true",
+        help="(default) do not auto-open a browser; listed for forward compat",
+    )
+    proxy_p.add_argument(
+        "--https", action="store_true",
+        help="enable self-signed HTTPS (required by iOS Safari getUserMedia)",
+    )
+
     export_p = sub.add_parser("export", help="export state to a directory")
     export_p.add_argument(
         "--output", default=str(REPO_ROOT / "exports"),
@@ -134,6 +155,58 @@ def cmd_talk(args) -> int:
     return 0
 
 
+def cmd_proxy(args) -> int:
+    import asyncio
+
+    import yaml
+
+    from src.client.proxy_server import (
+        DEFAULT_PROXY_PORT,
+        resolve_bridge_url,
+        run_proxy,
+    )
+
+    # Port precedence: CLI --port > deployment.yaml cloud.proxy_port > default.
+    port = args.port
+    if port is None:
+        try:
+            raw = yaml.safe_load(
+                Path(args.deploy_config).read_text(encoding="utf-8")
+            ) or {}
+            port = int((raw.get("cloud") or {}).get("proxy_port", DEFAULT_PROXY_PORT))
+        except Exception:
+            port = DEFAULT_PROXY_PORT
+
+    if args.bridge_url:
+        bridge_url = args.bridge_url
+    else:
+        try:
+            bridge_url = resolve_bridge_url(args.deploy_config)
+        except Exception as e:
+            print(f"could not resolve bridge URL: {e}", file=sys.stderr)
+            return 2
+    print(f"bridge: {bridge_url}")
+
+    ssl_context = None
+    if args.https:
+        try:
+            from src.client.cert_manager import ensure_self_signed_cert
+
+            cert_dir = REPO_ROOT / "state" / "certs"
+            ssl_context = ensure_self_signed_cert(cert_dir)
+        except Exception as e:
+            print(f"HTTPS setup failed ({e}); falling back to HTTP", file=sys.stderr)
+            ssl_context = None
+
+    try:
+        asyncio.run(
+            run_proxy(bridge_url=bridge_url, port=port, ssl_context=ssl_context)
+        )
+    except KeyboardInterrupt:
+        print("\nproxy stopped.")
+    return 0
+
+
 def cmd_text(args) -> int:
     # Delegate to the existing M2 chat REPL.
     from src.cli import chat as chat_mod
@@ -194,6 +267,7 @@ def cmd_check_deps(args) -> int:
 HANDLERS = {
     "wake": cmd_wake,
     "talk": cmd_talk,
+    "proxy": cmd_proxy,
     "sleep": cmd_sleep,
     "status": cmd_status,
     "text": cmd_text,

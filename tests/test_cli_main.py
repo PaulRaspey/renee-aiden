@@ -11,9 +11,75 @@ from src.cli import main as cli_main
 def test_build_parser_accepts_all_commands():
     parser = cli_main.build_parser()
     # Just a smoke test — each known command parses without error.
-    for cmd in ("wake", "talk", "sleep", "status", "text", "eval"):
+    for cmd in ("wake", "talk", "sleep", "status", "text", "eval", "proxy"):
         args = parser.parse_args([cmd])
         assert args.command == cmd
+
+
+def test_proxy_subcommand_parses_flags():
+    parser = cli_main.build_parser()
+    args = parser.parse_args(
+        ["proxy", "--port", "9000", "--bridge-url", "ws://x:1",
+         "--no-browser", "--https"]
+    )
+    assert args.command == "proxy"
+    assert args.port == 9000
+    assert args.bridge_url == "ws://x:1"
+    assert args.no_browser is True
+    assert args.https is True
+
+
+def test_proxy_handler_bails_when_bridge_url_unresolvable(monkeypatch, capsys, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text(
+        "mode: cloud\ncloud:\n  pod_id: x\n  audio_bridge_port: 8765\n",
+        encoding="utf-8",
+    )
+
+    def boom(_p):
+        raise RuntimeError("pod has no public IP")
+
+    monkeypatch.setattr("src.client.proxy_server.resolve_bridge_url", boom)
+
+    args = SimpleNamespace(
+        deploy_config=str(cfg),
+        port=None,
+        bridge_url=None,
+        no_browser=True,
+        https=False,
+    )
+    rc = cli_main.cmd_proxy(args)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "bridge url" in err.lower()
+
+
+def test_proxy_handler_respects_explicit_bridge_url(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text(
+        "mode: cloud\ncloud:\n  pod_id: x\n  audio_bridge_port: 8765\n  proxy_port: 9999\n",
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    async def fake_run_proxy(*, bridge_url, port, ssl_context=None):
+        captured["bridge_url"] = bridge_url
+        captured["port"] = port
+        captured["ssl_context"] = ssl_context
+
+    monkeypatch.setattr("src.client.proxy_server.run_proxy", fake_run_proxy)
+
+    args = SimpleNamespace(
+        deploy_config=str(cfg),
+        port=None,
+        bridge_url="ws://explicit:1",
+        no_browser=True,
+        https=False,
+    )
+    rc = cli_main.cmd_proxy(args)
+    assert rc == 0
+    assert captured == {"bridge_url": "ws://explicit:1", "port": 9999, "ssl_context": None}
 
 
 def test_export_command_accepts_output_flag():
