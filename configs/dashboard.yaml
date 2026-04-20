@@ -1,0 +1,35 @@
+# configs/dashboard.yaml
+#
+# M15 observability and tuning console. Loaded by src.dashboard.
+#
+# Fail-closed posture: binding to a non-loopback host requires a password.
+# Leaving `password` empty keeps the dashboard localhost-only.
+
+bind_host: "127.0.0.1"
+port: 7860
+
+# Password required when bind_host is NOT a loopback address. Leave blank
+# to enforce localhost-only. A short password is better than no password;
+# a long random string is better still. The dashboard compares via
+# constant-time equality.
+password: ""
+
+# Paths used for state read/write. Defaults match the repo layout.
+state_dir: "state"
+config_dir: "configs"
+
+# Which persona to show. Renée is the only active persona today; this
+# exists so the dashboard can be pointed at Aiden later without a code
+# change.
+persona: "renee"
+
+# Safety dial. The Tuning tab refuses to save any mood baseline axis that
+# moves more than this amount in one change unless the user explicitly
+# confirms (the frontend pops a confirm dialog; the backend still accepts
+# the write to preserve the audit trail).
+mood_axis_max_delta: 0.2
+
+# Sensitive caps require the caller to include {"confirm": "confirm"} in
+# the JSON body before the backend writes the change. Guards daily cap
+# edits, bad-day probability, and reality anchor target rate.
+confirm_token: "confirm"
