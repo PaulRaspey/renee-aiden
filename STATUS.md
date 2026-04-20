@@ -6,14 +6,16 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** Mobile PWA bridge verified end-to-end on matrix (2026-04-18). M0, M2-M14 green plus M14.mobile (PWA + proxy + TLS). M1 ASR + live audio still need CUDA for XTTS-v2.
+**Phase:** M15 pre-burn-in guardrails wired (2026-04-19). Phases 1-4 of the burn-in preamble all green. Documentation cleaned up, reality-anchor context classifier live, 120-minute daily cap enforced on the bridge, observability dashboard serving localhost:7860, overnight-TODO regressions pinned, readiness report written.
 **Branch:** main
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** see git log; latest sweep commit below.
-**Next milestone:** UAHP/QAL/Groq fallback/deployment.yaml drift sweep, then M15 long-running test.
-**Blockers:** Phone-side manual cert trust is the only step a test cannot script. See "Blocked on Paul" at the bottom if present.
+**Last commit:** see git log; four pre-M15 commits plus shutdown module land on top of the April 18 sweep.
+**Next milestone:** M15 daily burn-in begins. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health tab watched intentionally for drift.
+**Blockers:** Two deferred items in state/m15_readiness.md require the live pod (cold wake, real-bridge latency). Phone-side manual cert trust from prior sessions still outstanding.
 
-**Test summary:** 392 tests passing with 3 DeprecationWarnings from the websockets shim. 4 pre-existing memory tests still fail on HuggingFace network access only.
+**Test summary:** 471 tests passing. Phase 1-4 added 79 new tests (anchor context, daily cap, dashboard, overnight regressions, shutdown rehearsal). 4 pre-existing memory tests still fail on HuggingFace network access only.
+
+**M15 readiness:** `state/m15_readiness.md` — 8 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
 
 ## How to resume
 
