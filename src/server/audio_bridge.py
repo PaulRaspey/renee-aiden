@@ -48,6 +48,7 @@ class CloudAudioBridge:
         frame_size: int = FRAME_SIZE,
         greet_on_connect: bool = False,
         greeting_prompt: str = "system: greet paul, he just connected",
+        safety_layer: Any = None,
     ):
         self.orchestrator = orchestrator
         self.idle_watcher = idle_watcher
@@ -56,6 +57,18 @@ class CloudAudioBridge:
         self.frame_size = frame_size
         self.greet_on_connect = greet_on_connect
         self.greeting_prompt = greeting_prompt
+        # Safety layer is optional (tests supply None). When present it gates
+        # new connections against the daily cap cooldown.
+        self.safety_layer = safety_layer
+        # Fall back to whatever safety_layer the orchestrator or persona
+        # core exposes — saves callers from having to thread the layer in
+        # twice when there's only one instance in the process.
+        if self.safety_layer is None:
+            inferred = getattr(orchestrator, "safety_layer", None)
+            if inferred is None:
+                core = getattr(orchestrator, "persona_core", None)
+                inferred = getattr(core, "safety_layer", None) if core else None
+            self.safety_layer = inferred
         self._server = None
 
     # -------------------- receive (mic -> ASR pipeline) --------------------
@@ -102,6 +115,30 @@ class CloudAudioBridge:
     # -------------------- connection handler --------------------
 
     async def handle_client(self, ws, path: str = "") -> None:
+        # Gate on the daily cap cooldown before doing anything else. If the
+        # hard stop is still in effect, tell the client what happened and
+        # close the socket without touching ASR, TTS, or the orchestrator.
+        if self.safety_layer is not None and not self._bridge_allowed():
+            cooldown_until = self._cooldown_until()
+            farewell = self._cap_farewell()
+            payload = {
+                "type": "bridge_unavailable",
+                "reason": "daily_cap_cooldown",
+                "cooldown_until": cooldown_until,
+                "message": farewell,
+            }
+            try:
+                await ws.send(json.dumps(payload))
+            except Exception:
+                logger.debug("cap-cooldown notice send failed", exc_info=True)
+            # 1008 is the policy-violation close code; clients interpret it
+            # without needing to parse the text frame.
+            try:
+                await ws.close(code=1008, reason="daily cap cooldown")
+            except Exception:
+                logger.debug("cap-cooldown close failed", exc_info=True)
+            return
+
         # Install a transcript emitter on the orchestrator for the life of
         # this connection so the mobile client can show what was said and
         # what Renée responded. Binary frames are PCM; text frames are JSON.
@@ -128,8 +165,21 @@ class CloudAudioBridge:
             def unregister() -> None:
                 self.orchestrator.transcript_emitter = prior_emitter
 
+        # Session-end event: set by the orchestrator when the daily cap
+        # trips mid-session (after TTS has had a beat to speak the
+        # farewell). The bridge races this against the send/receive tasks
+        # and closes the socket cleanly when it fires.
+        session_end_event = asyncio.Event()
+        install = getattr(self.orchestrator, "install_session_end_event", None)
+        if callable(install):
+            try:
+                install(session_end_event)
+            except Exception:
+                logger.debug("install_session_end_event raised", exc_info=True)
+
         receive_task = asyncio.create_task(self._receive_audio(ws))
         send_task = asyncio.create_task(self._send_audio(ws))
+        end_task = asyncio.create_task(session_end_event.wait())
         greeting_task: Optional[asyncio.Task] = None
         if self.greet_on_connect:
             greet = getattr(self.orchestrator, "greet_on_connect", None)
@@ -142,7 +192,7 @@ class CloudAudioBridge:
             # websocket closed). Waiting on gather() would hang forever when
             # one side is parked on ws.wait_closed() and the other isn't.
             done, pending = await asyncio.wait(
-                {receive_task, send_task},
+                {receive_task, send_task, end_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for t in pending:
@@ -153,22 +203,67 @@ class CloudAudioBridge:
                 except (asyncio.CancelledError, Exception):
                     pass
             for t in done:
-                exc = t.exception()
+                exc = t.exception() if not t.cancelled() else None
                 if exc is not None:
                     logger.exception("bridge task raised", exc_info=exc)
+            # If the end event tripped, explicitly close so the client
+            # sees a clean shutdown rather than a dropped socket.
+            if session_end_event.is_set():
+                try:
+                    await ws.close(code=1000, reason="daily cap reached")
+                except Exception:
+                    logger.debug("cap-trip close failed", exc_info=True)
         except Exception:
             logger.exception("bridge connection error")
         finally:
-            for t in (receive_task, send_task):
+            for t in (receive_task, send_task, end_task):
                 if not t.done():
                     t.cancel()
             if greeting_task is not None and not greeting_task.done():
                 greeting_task.cancel()
+            clear = getattr(self.orchestrator, "clear_session_end_event", None)
+            if callable(clear):
+                try:
+                    clear()
+                except Exception:
+                    logger.debug("clear_session_end_event raised", exc_info=True)
             if unregister is not None:
                 try:
                     unregister()
                 except Exception:
                     logger.debug("transcript unregister raised", exc_info=True)
+
+    # -------------------- cap gating helpers --------------------
+
+    def _bridge_allowed(self) -> bool:
+        """Ask the safety layer whether the bridge can accept new clients."""
+        check = getattr(self.safety_layer, "bridge_allowed_now", None)
+        if not callable(check):
+            return True
+        try:
+            return bool(check())
+        except Exception:
+            logger.exception("bridge_allowed_now raised")
+            return True  # fail open on unexpected errors
+
+    def _cooldown_until(self) -> Optional[float]:
+        get = getattr(self.safety_layer, "bridge_cooldown_until", None)
+        if not callable(get):
+            return None
+        try:
+            return get()
+        except Exception:
+            logger.exception("bridge_cooldown_until raised")
+            return None
+
+    def _cap_farewell(self) -> str:
+        get = getattr(self.safety_layer, "cap_farewell", None)
+        if callable(get):
+            try:
+                return get()
+            except Exception:
+                logger.exception("cap_farewell raised")
+        return "That's the day. I'll be here tomorrow."
 
     # -------------------- lifecycle --------------------
 

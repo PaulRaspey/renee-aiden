@@ -90,6 +90,9 @@ class TurnOutput:
     receipt: CompletionReceipt
     retrieved_count: int
     filter_hits: list[str] = field(default_factory=list)
+    cap_tripped: bool = False
+    cap_minutes_used: float = 0.0
+    cap_minutes_limit: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +307,11 @@ class Orchestrator:
         # telemetry JSONL.
         self._conversation_log_dir = self.state_dir / "logs" / "conversations"
 
+        # Session-end signal used by the audio bridge. The bridge installs
+        # an asyncio.Event on start; the orchestrator fires it after TTS
+        # finishes speaking a farewell triggered by the daily cap.
+        self._session_end_event: Optional[asyncio.Event] = None
+
     def _default_library_root(self) -> Path:
         return REPO_ROOT / "paralinguistics" / self.persona_name
 
@@ -403,6 +411,15 @@ class Orchestrator:
         )
         self._append_conversation_log(user_text=user_text, response_text=response_text)
 
+        # If the health layer tripped the daily cap, the persona core has
+        # already replaced the LLM text with the farewell. Propagate the
+        # flag so the bridge can disconnect after TTS finishes speaking it.
+        if result.cap_tripped and self._session_end_event is not None:
+            # Defer the event set until TTS finishes. _on_asr_final handles
+            # that; text_turn callers reading the flag can schedule their
+            # own close.
+            pass
+
         return TurnOutput(
             text=response_text,
             prosody_plan=prosody_plan,
@@ -416,6 +433,9 @@ class Orchestrator:
             receipt=result.receipt,
             retrieved_count=len(result.retrieved_memories),
             filter_hits=list(result.filters.hits),
+            cap_tripped=bool(result.cap_tripped),
+            cap_minutes_used=float(result.cap_minutes_used),
+            cap_minutes_limit=float(result.cap_minutes_limit),
         )
 
     # ------------------------------------------------------------------
@@ -539,9 +559,38 @@ class Orchestrator:
             except Exception:
                 logger.exception("tts.speak raised")
 
+        # If the daily cap tripped on this turn, signal the bridge to close
+        # once the farewell has had a moment to reach the speaker. The TTS
+        # layer does not guarantee drain-complete, so give the audio a short
+        # grace window before disconnecting.
+        if output.cap_tripped:
+            await self._emit_transcript(
+                {
+                    "type": "session_end",
+                    "reason": "daily_cap_exceeded",
+                    "minutes_used": output.cap_minutes_used,
+                    "minutes_limit": output.cap_minutes_limit,
+                }
+            )
+            if self._session_end_event is not None:
+                try:
+                    await asyncio.sleep(1.5)
+                except asyncio.CancelledError:
+                    pass
+                self._session_end_event.set()
+
     # ------------------------------------------------------------------
     # transcript listener registry
     # ------------------------------------------------------------------
+
+    def install_session_end_event(self, event: asyncio.Event) -> None:
+        """Called by the audio bridge on connection accept so the
+        orchestrator can signal end-of-session (daily cap trip, etc.) by
+        setting the event. One event per active bridge session."""
+        self._session_end_event = event
+
+    def clear_session_end_event(self) -> None:
+        self._session_end_event = None
 
     def register_transcript_listener(self, conn_id: Any, cb) -> Callable[[], None]:
         """Register an async callable for the given connection id. Returns a

@@ -41,6 +41,12 @@ health_monitor:
   sustained_days_stronger: 28
   # Once raised, don't nag: wait this many days before re-raising the same flag.
   repeat_cooldown_days: 14
+  # Hard daily cap for M15 burn-in. When today's total conversation minutes
+  # cross this value the audio bridge is forced offline for
+  # post_cap_cooldown_minutes. Set to 0 to disable the hard stop.
+  daily_cap_minutes: 120
+  post_cap_cooldown_minutes: 60
+  cap_disconnect_message: "That's the day. I'll be here tomorrow."
 
 pii_scrubber:
   enabled: true

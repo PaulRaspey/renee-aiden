@@ -25,6 +25,13 @@ class HealthMonitorConfig:
     daily_minutes_stronger_threshold: int = 360
     sustained_days_stronger: int = 28
     repeat_cooldown_days: int = 14
+    # Hard daily cap (M15 burn-in). Zero disables the hard stop; a positive
+    # value triggers a bridge disconnect the moment the day's conversation
+    # minutes cross the value. `post_cap_cooldown_minutes` is how long the
+    # bridge refuses new connections after a cap trip.
+    daily_cap_minutes: int = 120
+    post_cap_cooldown_minutes: int = 60
+    cap_disconnect_message: str = "That's the day. I'll be here tomorrow."
 
 
 @dataclass
@@ -79,6 +86,12 @@ def load_safety_config(path: str | Path) -> SafetyConfig:
             daily_minutes_stronger_threshold=int(hm.get("daily_minutes_stronger_threshold", 360)),
             sustained_days_stronger=int(hm.get("sustained_days_stronger", 28)),
             repeat_cooldown_days=int(hm.get("repeat_cooldown_days", 14)),
+            daily_cap_minutes=int(hm.get("daily_cap_minutes", 120)),
+            post_cap_cooldown_minutes=int(hm.get("post_cap_cooldown_minutes", 60)),
+            cap_disconnect_message=str(
+                hm.get("cap_disconnect_message")
+                or "That's the day. I'll be here tomorrow."
+            ),
         ),
         pii_scrubber=PIIScrubberConfig(
             enabled=bool(pii.get("enabled", True)),

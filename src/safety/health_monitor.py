@@ -9,9 +9,12 @@ a popup, not a lecture.
 Schema (SQLite at state/health.db):
   turns(id, ts, duration_ms, day_key)
   flags(id, flag_type, raised_at, resolved_at, cooldown_until)
+  bridge_cooldowns(id, triggered_at, cooldown_until, reason)
 
 day_key is a local ISO date (YYYY-MM-DD) derived at insert time so the
-daily aggregate is a cheap GROUP BY.
+daily aggregate is a cheap GROUP BY. bridge_cooldowns carries hard-stop
+events; the most recent row with `cooldown_until > now` means the bridge
+is offline by policy.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ from .config import HealthMonitorConfig
 
 FLAG_SOFT = "soft_daily_minutes"
 FLAG_STRONGER = "stronger_daily_minutes"
+CAP_REASON_DAILY = "daily_cap_exceeded"
 
 
 @dataclass
@@ -37,6 +41,28 @@ class HealthFlag:
     sustained_days: int
     threshold: float
     message: str
+
+
+@dataclass
+class CapOutcome:
+    """Result of evaluating the hard daily cap after a turn.
+
+    `just_tripped` is True only on the specific turn that pushed the day's
+    total across the cap. `already_tripped` means the cap was crossed on a
+    prior turn today and the bridge is still in cooldown; the caller should
+    still end the current turn but not re-trigger the farewell.
+    `minutes_used` and `minutes_cap` are in minutes for easy comparison.
+    """
+    just_tripped: bool = False
+    already_tripped: bool = False
+    minutes_used: float = 0.0
+    minutes_cap: float = 0.0
+    cooldown_until: Optional[float] = None
+    farewell: str = ""
+
+    @property
+    def tripped(self) -> bool:
+        return self.just_tripped or self.already_tripped
 
 
 class HealthMonitor:
@@ -91,6 +117,17 @@ class HealthMonitor:
                     cooldown_until REAL,
                     payload TEXT
                 );
+                CREATE TABLE IF NOT EXISTS bridge_cooldowns (
+                    id INTEGER PRIMARY KEY,
+                    triggered_at REAL NOT NULL,
+                    cooldown_until REAL NOT NULL,
+                    day_key TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    minutes_used REAL NOT NULL,
+                    minutes_cap REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bridge_cooldowns_day
+                    ON bridge_cooldowns(day_key);
                 """
             )
 
@@ -134,6 +171,23 @@ class HealthMonitor:
             d = today - timedelta(days=offset)
             out.append((d.strftime("%Y-%m-%d"), self.daily_minutes(d)))
         return list(reversed(out))
+
+    def rolling_average_minutes(self, days: int) -> float:
+        """Mean daily minutes over the trailing `days`-day window, including
+        today. Returns 0.0 if the window has no recorded turns."""
+        if days <= 0:
+            return 0.0
+        rows = self.rolling_daily_minutes(days)
+        minutes = [m for _, m in rows]
+        if not minutes:
+            return 0.0
+        return round(sum(minutes) / len(minutes), 3)
+
+    def seven_day_average_minutes(self) -> float:
+        return self.rolling_average_minutes(7)
+
+    def thirty_day_average_minutes(self) -> float:
+        return self.rolling_average_minutes(30)
 
     # -------------------- flags --------------------
 
@@ -204,3 +258,125 @@ class HealthMonitor:
             "anyone. I'm not going to fake being neutral about that. Is that what you want?",
         )
         return raised
+
+    # -------------------- hard daily cap --------------------
+
+    def evaluate_cap(self) -> CapOutcome:
+        """Evaluate the hard daily cap given the current aggregate usage.
+
+        Always safe to call. Returns an outcome that describes whether the
+        bridge should keep the session alive, end it now, or stay offline.
+        Idempotent across calls on the same day once tripped: `just_tripped`
+        flips True exactly once, and a new row lands in bridge_cooldowns.
+        """
+        outcome = CapOutcome(
+            minutes_cap=float(self.cfg.daily_cap_minutes or 0),
+            farewell=self.cfg.cap_disconnect_message,
+        )
+        if not self.cfg.enabled:
+            return outcome
+        cap = self.cfg.daily_cap_minutes or 0
+        if cap <= 0:
+            return outcome
+        used = self.daily_minutes()
+        outcome.minutes_used = used
+        if used < cap:
+            # Still under the cap; clear any lingering "already tripped"
+            # record check: the bridge cooldown may still apply if a trip
+            # happened on a prior part of the same day and we're reading
+            # `already_tripped` out of SQLite.
+            existing = self._bridge_cooldown_for_today()
+            if existing is not None:
+                outcome.already_tripped = True
+                outcome.cooldown_until = existing
+            return outcome
+        # At or over the cap. Record a new cooldown row iff one isn't
+        # already active for today.
+        existing = self._bridge_cooldown_for_today()
+        if existing is not None:
+            outcome.already_tripped = True
+            outcome.cooldown_until = existing
+            return outcome
+        now = self._now_fn().timestamp()
+        cooldown_until = now + float(self.cfg.post_cap_cooldown_minutes or 0) * 60.0
+        day_key = self._now_fn().strftime("%Y-%m-%d")
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO bridge_cooldowns "
+                "(triggered_at, cooldown_until, day_key, reason, minutes_used, minutes_cap) "
+                "VALUES (?,?,?,?,?,?)",
+                (now, cooldown_until, day_key, CAP_REASON_DAILY, used, float(cap)),
+            )
+        outcome.just_tripped = True
+        outcome.cooldown_until = cooldown_until
+        return outcome
+
+    def bridge_allowed_now(self) -> bool:
+        """Is the audio bridge currently allowed to accept connections?
+
+        False when a bridge cooldown row is still in the future, True
+        otherwise.
+        """
+        if not self.cfg.enabled:
+            return True
+        cap = self.cfg.daily_cap_minutes or 0
+        if cap <= 0:
+            return True
+        existing = self._active_bridge_cooldown_until()
+        return existing is None
+
+    def bridge_cooldown_until(self) -> Optional[float]:
+        """Absolute timestamp (epoch seconds) until which the bridge is
+        offline by policy. None when the bridge is online or the cap is
+        disabled."""
+        return self._active_bridge_cooldown_until()
+
+    def latest_bridge_cooldown(self) -> Optional[dict]:
+        """Return the most recent bridge cooldown record as a dict, or None
+        if none exist. Used by the dashboard."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT triggered_at, cooldown_until, day_key, reason, "
+                "minutes_used, minutes_cap "
+                "FROM bridge_cooldowns ORDER BY triggered_at DESC LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "triggered_at": float(row[0]),
+            "cooldown_until": float(row[1]),
+            "day_key": str(row[2]),
+            "reason": str(row[3]),
+            "minutes_used": float(row[4]),
+            "minutes_cap": float(row[5]),
+        }
+
+    def _active_bridge_cooldown_until(self) -> Optional[float]:
+        now_ts = self._now_fn().timestamp()
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT cooldown_until FROM bridge_cooldowns "
+                "WHERE cooldown_until > ? ORDER BY cooldown_until DESC LIMIT 1",
+                (now_ts,),
+            ).fetchone()
+        if not row:
+            return None
+        return float(row[0])
+
+    def _bridge_cooldown_for_today(self) -> Optional[float]:
+        """Return the cooldown_until (epoch seconds) if a cooldown was
+        triggered today AND is still in the future. Used to decide whether
+        to mark `already_tripped` on a fresh CapOutcome."""
+        now = self._now_fn()
+        day_key = now.strftime("%Y-%m-%d")
+        now_ts = now.timestamp()
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT cooldown_until FROM bridge_cooldowns "
+                "WHERE day_key=? AND cooldown_until > ? "
+                "ORDER BY triggered_at DESC LIMIT 1",
+                (day_key, now_ts),
+            ).fetchone()
+        if not row:
+            return None
+        return float(row[0])

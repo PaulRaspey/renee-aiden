@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import SafetyConfig, load_safety_config
-from .health_monitor import HealthFlag, HealthMonitor
+from .health_monitor import CapOutcome, HealthFlag, HealthMonitor
 from .pii_scrubber import PIIScrubber, ScrubResult
 from .reality_anchors import AnchorResult, RealityAnchorInjector
 
@@ -78,8 +78,23 @@ class SafetyLayer:
 
     # -------------------- health --------------------
 
-    def record_turn_duration(self, duration_ms: float) -> None:
+    def record_turn_duration(self, duration_ms: float) -> CapOutcome:
+        """Record one turn's wall-clock duration and evaluate the hard daily
+        cap. Returns a CapOutcome the caller can read to decide whether to
+        override this turn's reply with the farewell and end the session.
+        Prior callers that discard the return value still work unchanged."""
         self.health.record_turn(duration_ms)
+        return self.health.evaluate_cap()
 
     def check_flags(self) -> list[HealthFlag]:
         return self.health.check_flags()
+
+    def bridge_allowed_now(self) -> bool:
+        """Bridge-side gate. False when a hard-cap cooldown is active."""
+        return self.health.bridge_allowed_now()
+
+    def bridge_cooldown_until(self):
+        return self.health.bridge_cooldown_until()
+
+    def cap_farewell(self) -> str:
+        return self.cfg.health_monitor.cap_disconnect_message

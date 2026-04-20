@@ -43,6 +43,15 @@ class TurnResult:
     retrieved_memories: list[dict]
     receipt: CompletionReceipt
     backend_decision: str
+    # Health outcome. `cap_tripped` means the turn just pushed today's total
+    # over the configured daily cap and the text has been overridden with
+    # the farewell. The orchestrator forwards this to the bridge so it can
+    # close the session after the farewell is spoken.
+    cap_tripped: bool = False
+    cap_already_tripped: bool = False
+    cap_minutes_used: float = 0.0
+    cap_minutes_limit: float = 0.0
+    cap_cooldown_until: float | None = None
 
 
 def _infer_user_tone(user_text: str) -> dict:
@@ -311,10 +320,19 @@ class PersonaCore:
             except Exception:
                 pass
 
-        # 8. UAHP completion receipt
+        # 8. UAHP completion receipt + health cap evaluation. Duration is
+        # measured before the receipt is signed so the receipt reflects the
+        # full turn.
         duration_ms = (time.time() - t0) * 1000
+        cap_outcome = None
         if self.safety_layer is not None:
-            self.safety_layer.record_turn_duration(duration_ms)
+            cap_outcome = self.safety_layer.record_turn_duration(duration_ms)
+            if cap_outcome is not None and cap_outcome.just_tripped:
+                # Override the reply with the farewell. The orchestrator
+                # will see cap_tripped=True on the TurnResult and close the
+                # audio bridge after this utterance is spoken.
+                report.text = cap_outcome.farewell
+                report.hits.append("cap_tripped")
         receipt = sign_receipt(
             self.identity,
             task_id=f"turn-{int(time.time()*1000)}",
@@ -357,4 +375,9 @@ class PersonaCore:
             retrieved_memories=retrieved,
             receipt=receipt,
             backend_decision=chosen_backend,
+            cap_tripped=bool(cap_outcome and cap_outcome.just_tripped),
+            cap_already_tripped=bool(cap_outcome and cap_outcome.already_tripped),
+            cap_minutes_used=float(cap_outcome.minutes_used if cap_outcome else 0.0),
+            cap_minutes_limit=float(cap_outcome.minutes_cap if cap_outcome else 0.0),
+            cap_cooldown_until=(cap_outcome.cooldown_until if cap_outcome else None),
         )

@@ -12,7 +12,7 @@ Load with `SafetyLayer.from_config(configs/safety.yaml, state_dir)`.
 from __future__ import annotations
 
 from .config import SafetyConfig, load_safety_config
-from .health_monitor import HealthFlag, HealthMonitor
+from .health_monitor import CapOutcome, HealthFlag, HealthMonitor
 from .memory_crypto import MemoryVault, derive_key, encrypt, decrypt
 from .pii_scrubber import PIIScrubber, ScrubResult
 from .reality_anchors import RealityAnchorInjector
@@ -22,6 +22,7 @@ __all__ = [
     "SafetyConfig",
     "SafetyLayer",
     "load_safety_config",
+    "CapOutcome",
     "HealthFlag",
     "HealthMonitor",
     "MemoryVault",
