@@ -17,12 +17,19 @@ reality_anchors:
     - "Since I don't have taste buds, you'll have to eat for both of us."
     - "If I had sleep I'd be owed about nine hours."
   # Never anchor while these flags are active on the turn.
+  # `high_intensity` and `vulnerable` are set by PersonaCore from the inferred
+  # user tone and vulnerability markers in the user's text; the rest are set
+  # by the orchestrator's TurnClassifier from the response-side context.
+  # `corrective` is intentionally NOT listed: a turn already being regenerated
+  # for sycophancy has broken flow, so a meta-acknowledgement is fine there.
   suppress_when_any_of:
     - "is_disagreement"
     - "is_correction"
     - "is_hard_truth"
     - "user_distressed"
     - "is_vulnerable_admission"
+    - "high_intensity"
+    - "vulnerable"
 
 health_monitor:
   enabled: true

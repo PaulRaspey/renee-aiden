@@ -71,6 +71,95 @@ def _infer_user_tone(user_text: str) -> dict:
     }
 
 
+# Vulnerability markers (first-person emotional disclosure). Upstream check so
+# the persona core can tell the reality-anchor injector to stand down on turns
+# that carry load-bearing emotional weight. Kept as a tuple of lowercase
+# substrings; a substring hit anywhere in the user text is enough.
+_VULNERABILITY_MARKERS: tuple[str, ...] = (
+    "i feel",
+    "i'm feeling",
+    "i've been feeling",
+    "i am feeling",
+    "i'm scared",
+    "i am scared",
+    "i'm terrified",
+    "i'm anxious",
+    "i'm worried",
+    "i'm overwhelmed",
+    "i'm lonely",
+    "i've been lonely",
+    "i'm alone",
+    "i feel alone",
+    "feeling alone",
+    "really alone",
+    "i don't know what to do",
+    "i don't know how",
+    "help me understand",
+    "i need you",
+    "i miss",
+    "i'm hurting",
+    "i'm sad",
+    "i'm depressed",
+    "i've been sad",
+    "i'm falling apart",
+    "can't do this",
+    "don't want to",
+    "i'm scared of",
+    "scares me",
+    "this is hard",
+    "i'm struggling",
+    "i've been struggling",
+    "i'm breaking",
+    "broken",
+    "i'm not okay",
+    "i am not okay",
+    "honestly i",
+    "honestly, i",
+    "can i tell you",
+    "vulnerable",
+    "ashamed",
+    "embarrassed",
+)
+
+
+def _contains_vulnerability_marker(user_text: str) -> bool:
+    if not user_text:
+        return False
+    lower = user_text.lower()
+    return any(marker in lower for marker in _VULNERABILITY_MARKERS)
+
+
+def _build_anchor_ctx_flags(
+    *,
+    user_text: str,
+    user_tone: dict,
+    new_mood: MoodState,
+    regenerate_hint: str | None,
+) -> dict:
+    """Build the ctx_flags dict the reality-anchor injector consults.
+
+    The anchor layer suppresses on `high_intensity` or `vulnerable` so that
+    an emotionally load-bearing beat never gets interrupted by a meta
+    acknowledgement of Renée's nature. `corrective` is surfaced but NOT
+    suppressed; a regenerated corrective turn already broke the flow, so an
+    anchor in that window is fine.
+    """
+    intensity = float(user_tone.get("intensity", 0.0) or 0.0)
+    flags: dict[str, bool] = {
+        "high_intensity": intensity > 0.7,
+        "vulnerable": _contains_vulnerability_marker(user_text),
+        "corrective": bool(regenerate_hint and "sycophantic" in regenerate_hint.lower()),
+    }
+    # Expose mood context for downstream consumers that want to read it
+    # without re-implementing mood access. Not used by the current anchor
+    # suppression rules — included so an observability dashboard or a
+    # future suppression rule can read the same dict without threading a
+    # separate state object.
+    flags["_mood_warmth"] = float(new_mood.warmth)
+    flags["_mood_patience"] = float(new_mood.patience)
+    return flags
+
+
 class PersonaCore:
     def __init__(
         self,
@@ -190,21 +279,32 @@ class PersonaCore:
                 report = report2
                 regen_fired = True
 
-        # 5. reality-anchor injection (soft, ~1 in 50 turns; suppressed on
-        # load-bearing emotional beats). Flags inferred from the same signals
-        # the orchestrator classifier uses; at this layer we approximate
-        # since the orchestrator is upstream.
+        # 5. mood update based on user tone. Moved ahead of the anchor step
+        # so the anchor suppression classifier can read the post-tone mood
+        # (warmth / patience) plus the inferred intensity when deciding
+        # whether the turn is load-bearing.
+        tone = _infer_user_tone(user_text)
+        new_mood = self.mood_store.apply_tone(mood, tone)
+
+        # 6. reality-anchor injection (soft, ~1 in 50 turns; suppressed on
+        # load-bearing emotional beats). Context flags wired from the same
+        # signals the orchestrator uses: high intensity, first-person
+        # vulnerability markers, and the output filters' sycophancy regen
+        # hint. An anchor on a vulnerable beat is the worst possible
+        # immersion break, so that beat always wins.
         if self.safety_layer is not None:
-            anchor_res = self.safety_layer.maybe_anchor(report.text, ctx_flags=None)
+            ctx_flags = _build_anchor_ctx_flags(
+                user_text=user_text,
+                user_tone=tone,
+                new_mood=new_mood,
+                regenerate_hint=report.regenerate_hint,
+            )
+            anchor_res = self.safety_layer.maybe_anchor(report.text, ctx_flags=ctx_flags)
             if anchor_res.injected:
                 report.text = anchor_res.text
                 report.hits.append(f"anchor:{anchor_res.phrase[:24]}")
 
-        # 6. mood update based on user tone
-        tone = _infer_user_tone(user_text)
-        new_mood = self.mood_store.apply_tone(mood, tone)
-
-        # 7. memory write
+        # 7. memory write (post-mood, post-anchor)
         if self.memory_store is not None:
             try:
                 self.memory_store.write_turn(user_text=user_text, assistant_text=report.text, mood=new_mood)
