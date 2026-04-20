@@ -48,7 +48,7 @@ For voice mode:
 | Persona first token | <400ms |
 | TTS first audio | <300ms |
 
-### 5. The Samantha Test
+### 5. The Presence Test
 Subjective, but scored. After each session, PJ rates:
 - "Did it feel like talking to a person?" (1-10)
 - "Did anything break the illusion?" (list)

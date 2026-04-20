@@ -1,174 +1,106 @@
-# Her Script Analysis Pipeline
+# Reference Script Style Analysis Pipeline
+
+## Scope clarification (2026-04-19)
+
+This document originally described a speculative pipeline that would have ingested third-party scripts. That pipeline was never built, and the project does not analyze, store, or derive style from any copyrighted script, audio performance, or fictional character.
+
+The M12 style extractor that actually ships reads exactly one file: `scripts/renee_reference_script.md`, an original work written by PJ specifically as Renée's voice reference. Everything below describes that shipped pipeline.
 
 ## What This Does
 
-When PJ uploads the *Her* script, this pipeline extracts statistical and structural patterns without ingesting dialogue into any training or retrieval system. Output: numeric parameters and rules in `configs/style_reference.yaml`.
+Given the original reference script, the extractor produces statistical and structural parameters that are written to `configs/style_reference.yaml`. Those parameters feed the prosody planner and persona prompt assembler as measured targets.
 
 ## What It Does NOT Do
 
-- Store script dialogue in memory or vector stores
-- Feed script dialogue to any LLM as few-shot examples
-- Train or fine-tune on script content
-- Reproduce dialogue in outputs
-- Make Renée imitate Samantha's specific lines
+- Ingest any third-party script, novel, screenplay, or transcript
+- Store source dialogue in memory, vector stores, or any retrieval surface
+- Feed source dialogue to any LLM as few-shot or system-prompt content
+- Train or fine-tune any model weights on the source
+- Reproduce the source dialogue verbatim in outputs
+- Make Renée imitate a specific fictional character's specific lines
 
 ## What Gets Extracted
 
 ### Turn-level statistics
+
 - Turn length distribution (median, p25, p75, p95)
-- Samantha's turn length vs other characters
+- Renée-speaker turn length vs other-speaker turn length in the reference
 - Sentence count per turn distribution
 
 ### Hedge and uncertainty patterns
+
 - Frequency of hedge markers ("I think," "maybe," "sort of")
 - Position within turn (opening vs mid vs closing)
 - Correlation with emotional content
 
 ### Paralinguistic density
-- Laugh frequency per minute of conversation
+
+- Laugh frequency per minute of reference conversation
 - Sigh, breath, "mm" frequency
 - Position patterns (before vulnerable moment? after joke?)
 
 ### Callback structure
-- Distance between original mention and callback
+
+- Distance between original mention and callback within the reference
 - Callback trigger patterns
-- Success rate (does the other character recognize it)
+- Per-scene callback-anchor token extraction (both speakers indexed, per Decision 47)
 
 ### Emotional beat pacing
+
 - Average turns between emotional peaks
 - Recovery time after high-intensity moments
-- Transition patterns (how do they move from light to serious)
+- Transition patterns from light to serious
 
 ### Pause distribution
+
 - Mean pause duration by context
 - Long pause frequency (>1.5s)
 - Silence-as-response occurrence
 
-### Vocabulary texture (statistical only)
-- Type-token ratio for Samantha
+### Vocabulary texture (statistical only, no dialogue stored)
+
+- Type-token ratio
 - Sensory vocabulary frequency
 - Abstract vs concrete noun ratio
 - Pronoun use patterns
 
-## Pipeline Steps
+## Pipeline Steps (as shipped)
+
+See `src/eval/style_extractor.py`. In outline:
 
 ```python
-# src/analysis/her_pipeline.py (to be built in M12)
+from pathlib import Path
+from src.eval.style_extractor import extract
 
-def analyze(script_path: Path) -> StyleReference:
-    # 1. Parse script format (Fountain, PDF, plain text)
-    scenes = parse_script(script_path)
-    
-    # 2. Identify Samantha's dialogue
-    samantha_turns = extract_character_turns(scenes, character="SAMANTHA")
-    theodore_turns = extract_character_turns(scenes, character="THEODORE")
-    
-    # 3. Run statistical extractors
-    stats = {
-        "turn_length": compute_length_distribution(samantha_turns),
-        "hedge_frequency": compute_hedge_rate(samantha_turns),
-        "paralinguistic_density": compute_paralinguistic_rate(samantha_turns),
-        "callbacks": analyze_callback_structure(samantha_turns, theodore_turns),
-        "emotional_pacing": compute_beat_pacing(scenes),
-        "pauses": extract_pause_markup(samantha_turns),
-        "vocabulary": compute_vocabulary_statistics(samantha_turns),
-    }
-    
-    # 4. Convert to rules
-    rules = statistics_to_rules(stats)
-    
-    # 5. Verify no dialogue leaked into rules
-    assert_no_verbatim_content(rules, samantha_turns)
-    
-    # 6. Write config
-    write_yaml(rules, "configs/style_reference.yaml")
-    
-    # 7. Delete script from working memory
-    return rules  # rules only, never the source
+rules = extract(Path("scripts/renee_reference_script.md"))
+rules.write_yaml(Path("configs/style_reference.yaml"))
 ```
 
-## Output Format
-
-```yaml
-# configs/style_reference.yaml (generated, not hand-written)
-
-style_reference_derived_from: Her_script_analysis_2026_04_20
-source_ingested: false     # dialogue not stored, only statistics
-verbatim_content: none
-
-turn_length:
-  median_words: 14
-  p25: 7
-  p75: 23
-  p95: 48
-  very_short_turn_rate: 0.15  # turns under 4 words
-
-hedge_patterns:
-  rate_per_turn: 0.38
-  opening_position_rate: 0.55
-  common_markers_statistical_only:
-    - marker_type: "I think"
-      frequency_rank: 1
-    - marker_type: "maybe"
-      frequency_rank: 2
-  # note: these markers are commonly used by the character archetype
-  # not tied to specific lines from the source
-
-paralinguistic_density:
-  laughs_per_10_turns: 1.8
-  soft_laughs_ratio: 0.7
-  sighs_per_10_turns: 0.6
-  thinking_sounds_per_10_turns: 1.2
-
-callback_structure:
-  mean_distance_turns: 12
-  mean_distance_minutes: 8
-  callback_rate_of_opportunities: 0.45
-  emotional_weight_bias: 0.6    # callbacks favor emotional content over factual
-
-pause_patterns:
-  long_pause_rate: 0.18
-  long_pause_context_bias:
-    before_vulnerable: 0.6
-    after_emotional_peak: 0.5
-    before_callback: 0.2
-
-emotional_pacing:
-  average_turns_between_peaks: 8
-  recovery_turns: 3
-  light_to_serious_transitions_per_scene: 1.5
-
-vocabulary_texture:
-  sensory_word_frequency: 0.08
-  abstract_noun_ratio: 0.22
-  pronoun_use_first_person: 0.09
-  pronoun_use_second_person: 0.14
-  # biased toward "you" relative to typical dialogue — intimate register
-```
+The extractor refuses to read any script path outside `scripts/renee_reference_script.md` unless explicitly overridden by a local developer, and that override is never exercised in production.
 
 ## Integration
 
 These rules feed into:
+
 - Prosody layer pause distribution targets
-- Paralinguistic injection density
-- Persona core hedge enforcement (tune hedge_frequency to 0.35-0.40 range)
+- Paralinguistic injection density per-tone
+- Persona core hedge enforcement (tune hedge_frequency to the measured range)
 - Callback engine timing and frequency
 - Turn length governor targets
 
-Result: Renée's conversational *shape* resembles Samantha's statistically, without any specific line matching.
+See Decision 49 in `DECISIONS.md` for the "style flows into two places" note on how the measured values reach both the prompt side and the prosody side.
 
 ## Verification
 
-After pipeline runs:
-1. `scripts/verify_no_verbatim.py` scans all downstream configs and state files
-2. Confirms no 7+ word sequence from source appears anywhere
-3. Flags any near-matches for manual review
-4. Signs verification attestation into `state/copyright_attestation.json`
+After an extraction run:
 
-PJ should run this verification quarterly to confirm ongoing compliance.
+1. `scripts/verify_no_verbatim.py` (when added) scans downstream configs and state files
+2. Confirms no 7+ word sequence from the source appears anywhere the model could retrieve it
+3. Flags any near-matches for manual review
+4. Signs a verification attestation into `state/copyright_attestation.json`
+
+PJ can run this verification quarterly as a discipline check even though the source is original work.
 
 ## What This Gives Us
 
-The statistical "shape" of Samantha's speech without her words. Think of it like studying the rhythm of a great pianist without copying their compositions. Renée plays her own notes, but the pacing, the emphasis, the breath between phrases — that we can learn from without stealing.
-
-This is the honest version of the "Samantha effect." Not imitation. Influence.
+The statistical shape of the original reference script, without embedding any of its specific lines into retrieval or training. The extractor measures rhythm, emphasis, and breath distribution from one document and emits numeric targets that the rest of the stack consumes. No copyrighted work is touched by this pipeline.

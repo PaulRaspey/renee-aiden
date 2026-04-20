@@ -2,7 +2,7 @@
 
 **Project codename:** Renée (female persona) and Aiden (male persona), built on the UAHP protocol stack as successors to Ka.
 
-**North star:** Indistinguishable from a real person in voice-to-voice interaction. TARS/CASE/JARVIS intelligence, Samantha-from-*Her* intimacy. Passes a sustained voice Turing test over 30+ minute conversations with someone who knows it's potentially an AI.
+**North star:** Presence sustained across 30+ minute voice conversations. An entity specific enough in character, responsive enough in timing, and warmly imperfect enough in texture that conversation with her feels like talking to someone, not to something.
 
 **Owner:** Paul Raspey (PJ)
 **Architecture lineage:** UAHP v0.5.4+, CSP, QAL, GWP, Ka reference implementation
@@ -16,7 +16,7 @@
 3. **No sycophancy.** She pushes back, disagrees, has opinions, gets annoyed. A helpful assistant is not the goal. A *person* is the goal.
 4. **UAHP-native.** Every component is a UAHP agent with cryptographic identity, trust scoring, liveness, and signed completion receipts. No exceptions.
 5. **Controlled imperfection.** Flaws are features. Hedges, self-corrections, occasional memory slips, variable energy.
-6. **Copyright safety.** No training on *Her* audio or copyrighted voice material. Style extraction only.
+6. **Copyright safety.** No training on any copyrighted voice material or fictional character performance. Style extraction from original reference work only.
 7. **Local-first, cloud-augmented.** Critical paths run locally. Cloud is for heavy reasoning bursts.
 
 ---

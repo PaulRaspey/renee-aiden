@@ -5,7 +5,7 @@ The non-word sounds that separate "AI reading text" from "person talking." The s
 
 ## The Theory
 
-Rewatch any scene from *Her* with eyes closed. Samantha's humanness is ~40% the voice clone, ~60% the paralinguistics. Laughs, sighs, sharp inhales, "mm," the micro-reactions. Most TTS systems have zero. Ours will have hundreds.
+Close your eyes and listen to any natural conversation between two people who know each other. Roughly 40 percent of the humanness is in the voice itself; the other 60 percent is paralinguistics. Laughs, sighs, sharp inhales, "mm," the micro-reactions that happen between and underneath words. Most TTS systems have zero. This stack will carry hundreds.
 
 ## Library Structure
 
@@ -160,7 +160,7 @@ If Renée is pushing back, correcting PJ, or delivering an unwelcome observation
 
 ## Density Tuning
 
-Target frequency (from *Her* analysis):
+Target frequency (from the original reference script analysis in `scripts/renee_reference_script.md`):
 - Casual conversation: 1 paralinguistic per 2-3 turns
 - Playful exchange: 1 per turn
 - Serious discussion: 1 per 5+ turns (mostly breaths and thinking sounds)

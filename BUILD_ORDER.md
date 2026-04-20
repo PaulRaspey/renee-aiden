@@ -177,17 +177,17 @@ Claude Code: work through this list in order. Each milestone has acceptance crit
 
 ---
 
-## M12 — *Her* Script Analysis (half day)
+## M12 — Reference Script Style Extraction (half day)
 
-**Goal:** Extract style patterns from the reference corpus without training on it.
+**Goal:** Extract style patterns from the original reference script (`scripts/renee_reference_script.md`, written by PJ) without training on it, and without sourcing from any copyrighted work.
 
-- [ ] PJ uploads *Her* script (text only, not audio)
-- [ ] Analyzer extracts: turn lengths, hedge frequency, paralinguistic density, callback patterns, topic drift rate, emotional vocabulary distribution
+- [ ] Analyzer reads `scripts/renee_reference_script.md` only
+- [ ] Extracts: turn lengths, hedge frequency, paralinguistic density, callback patterns, topic drift rate, emotional vocabulary distribution
 - [ ] Output: `configs/style_reference.yaml` — rules derived from analysis
 - [ ] Feed into persona core as style constraints, NOT as training data
-- [ ] Document the separation clearly in `COPYRIGHT.md`
+- [ ] Document the separation in `COPYRIGHT.md`
 
-**Acceptance:** Style config generated. Renée's output shows measurably closer match to extracted patterns without any verbatim dialogue reproduction.
+**Acceptance:** Style config generated from the original reference script. Renée's output shows measurably closer match to extracted patterns without verbatim dialogue reproduction, and the analyzer refuses to read any script file outside the original reference.
 
 ---
 

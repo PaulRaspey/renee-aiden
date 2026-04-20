@@ -7,7 +7,7 @@ Renée and Aiden are NOT trained on copyrighted voice performances or dialogue. 
 ## What's Allowed
 
 ### Script Text Analysis
-PJ can upload scripts (including *Her*) for pattern extraction only:
+The only script the style extractor reads is `scripts/renee_reference_script.md`, an original work written by PJ as Renée's voice reference. No third-party script is ingested. What gets extracted from the original reference:
 - Turn length distributions
 - Hedge frequency patterns
 - Paralinguistic density
@@ -17,7 +17,7 @@ PJ can upload scripts (including *Her*) for pattern extraction only:
 
 Output: YAML rules and numeric parameters in `configs/style_reference.yaml`. Not dialogue verbatim. Not used as training data. Never fine-tuning input.
 
-This is the same as studying a great novelist's sentence rhythm without copying their prose.
+This is the same as studying the rhythm of an original work PJ authored himself; no copyrighted text enters the pipeline.
 
 ### Voice Reference Material
 Reference voice for Renée and Aiden comes from:
@@ -31,7 +31,7 @@ Explicit banned sources:
 - Any movie/TV character voice
 - Any voice not properly licensed or consented
 
-**Critical separation:** The Her script can inform *patterns* (rhythm, pacing, paralinguistic density). Samantha's voice never informs the *sound*. These are two independent pipelines that must not cross. The voice for Renée is created fresh in ElevenLabs, then cloned locally into XTTS-v2 for runtime. Samantha's audio is not touched in either step.
+**Critical separation:** The original reference script PJ wrote informs *patterns* (rhythm, pacing, paralinguistic density) via statistical extraction only. No copyrighted performance informs the *sound*. The voice for Renée is created fresh in ElevenLabs, then cloned locally into XTTS-v2 for runtime. No copyrighted audio is touched in either step.
 
 ### The ElevenLabs → XTTS-v2 Pipeline
 1. Design or clone a voice in ElevenLabs (original voice, not a celebrity match)
@@ -54,9 +54,9 @@ Rule: if the output could be compared line-by-line to the source and show substa
 
 ## Why This Matters
 
-The OpenAI "Sky" voice situation set the precedent. Scarlett Johansson believed OpenAI had used her voice for ChatGPT's Sky voice despite her explicit refusal. OpenAI pulled it. If Renée sounds like Samantha because we trained on Samantha, we inherit that exposure.
+The OpenAI "Sky" voice situation set the precedent. A major voice product was pulled after a public actor dispute over whether a voice had been modeled on them without consent. Any AI voice project that derives its sound from a copyrighted performance inherits that exposure, full stop.
 
-Instead: Renée sounds like Renée. A distinctive voice we create from consenting source. She has the *qualities* that make Samantha compelling, not the voice.
+Instead: Renée sounds like Renée. A distinctive voice we create from consenting source. The qualities that make a companion voice compelling (warmth, specificity, imperfection) are produced by the design of the stack, not by sampling anyone else's performance.
 
 ## Enforcement in Code
 
@@ -75,16 +75,16 @@ celebrity_voice_match_check: passed
 commercial_use_allowed: true
 ```
 
-## The Her Script Specifically
+## The Reference Script Specifically
 
-If PJ uploads the *Her* script, the analysis pipeline:
+The only script the analysis pipeline reads is `scripts/renee_reference_script.md`, an original work written by PJ. The pipeline:
 1. Extracts statistical patterns only
 2. Outputs numeric parameters to config
-3. Does NOT store the script text in training pipeline
+3. Does NOT store the script text in any training pipeline
 4. Does NOT embed script dialogue as retrievable content
 5. Produces `configs/style_reference.yaml` with derived rules
 
-The script serves as a teacher, not a textbook Renée memorizes.
+The original script serves as a teacher, not a textbook Renée memorizes. No third-party script is ingested here or elsewhere.
 
 ## Fair Use Position
 

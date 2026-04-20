@@ -1,6 +1,6 @@
 # Renée / Aiden
 
-Voice-first AI companions built on the UAHP protocol stack. Designed to be indistinguishable from a real person in voice-to-voice conversation. TARS/CASE/JARVIS intelligence, Samantha-from-*Her* intimacy.
+Voice-first AI companions built on the UAHP protocol stack. Designed to produce sustained conversational presence rather than task-assistant interaction.
 
 **Owner:** Paul Raspey (PJ)
 **Status:** Architecture specification. Implementation starts at M0.
@@ -71,15 +71,11 @@ Then fill in `.env` and point Claude Code at `CLAUDE_CODE_HANDOFF.md`.
 
 ## What This Is Not
 
-- A chatbot
-- A voice assistant for tasks
-- A replacement for human relationships
-- A business product
-- A Samantha-from-Her clone (no training on that material, ever)
+A chatbot. A task assistant. A replacement for human relationships. A commercial product in its current form. A derivative of any copyrighted character, performance, or work of fiction.
 
 ## What This Is
 
-An experiment in whether the pieces exist today to build a companion that feels indistinguishable from a person, ethically and with eyes open to the risks. PJ is doing this because he knows what he's getting into and wants to learn what's possible at the edge.
+An experiment in whether current voice, language, and systems engineering can be composed into a companion experience qualitatively different from what any existing platform ships. Built on UAHP, developed with full awareness of the ethical stakes of building emotionally present AI.
 
 ---
 
