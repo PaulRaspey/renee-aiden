@@ -298,6 +298,14 @@ class Orchestrator:
         self._transcript_listeners: dict[Any, Any] = {}
         self._legacy_emitter: Optional[Any] = None
 
+        # Per-connection audio taps (mic_cb, renee_cb). Taps are read-only
+        # observers used by the session recorder. They must not mutate the
+        # bytes they receive. Either callback may be None. The bridge (or
+        # any caller) installs a pair via ``register_audio_tap(conn_id,
+        # mic_cb, renee_cb)`` and uses the returned closure to remove on
+        # disconnect.
+        self._audio_taps: dict[Any, tuple] = {}
+
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -512,8 +520,16 @@ class Orchestrator:
 
         Delegates to the ASR pipeline when one is configured; drops the
         frame silently otherwise (the bridge decides whether to drain or
-        log — it should not be this class's problem).
+        log, it should not be this class's problem). Tap callbacks fire
+        first so a missing ASR pipeline never prevents capture.
         """
+        for mic_cb, _ in list(self._audio_taps.values()):
+            if mic_cb is None:
+                continue
+            try:
+                mic_cb(pcm)
+            except Exception:
+                logger.debug("audio tap mic_cb raised", exc_info=True)
         if self.asr is None:
             return
         await self.asr.feed_audio(pcm)
@@ -608,6 +624,31 @@ class Orchestrator:
             1 if self._legacy_emitter is not None else 0
         )
 
+    def register_audio_tap(
+        self,
+        conn_id: Any,
+        mic_cb: Optional[Callable[[bytes], None]] = None,
+        renee_cb: Optional[Callable[[bytes], None]] = None,
+    ) -> Callable[[], None]:
+        """Register a read-only audio tap for the given connection.
+
+        mic_cb fires on every ``feed_audio(pcm)``, with the raw inbound
+        bytes. renee_cb fires on every chunk yielded from
+        ``tts_output_stream``, before the chunk reaches the consumer.
+        Either callback may be None. Returns an ``unregister()`` closure.
+        Taps must not mutate the bytes they observe, the contract relies
+        on bit-for-bit parity.
+        """
+        self._audio_taps[conn_id] = (mic_cb, renee_cb)
+
+        def _remove() -> None:
+            self._audio_taps.pop(conn_id, None)
+
+        return _remove
+
+    def audio_tap_count(self) -> int:
+        return len(self._audio_taps)
+
     @property
     def transcript_emitter(self):
         return self._legacy_emitter
@@ -669,12 +710,21 @@ class Orchestrator:
         When TTS is configured, yields 20ms PCM frames at the bridge's
         wire sample rate. When it isn't, parks on a never-set Event so
         the bridge's send task doesn't exit early and tear down the
-        websocket — cancellation from handle_client cleans this up.
+        websocket, cancellation from handle_client cleans this up. Any
+        registered audio taps observe each chunk before it yields so the
+        recorder never misses a chunk that the consumer cancels on.
         """
         if self.tts is None:
             await asyncio.Event().wait()
             return
         async for chunk in self.tts.stream():
+            for _, renee_cb in list(self._audio_taps.values()):
+                if renee_cb is None:
+                    continue
+                try:
+                    renee_cb(chunk)
+                except Exception:
+                    logger.debug("audio tap renee_cb raised", exc_info=True)
             yield chunk
 
     def begin_renee_preparing(self) -> None:
