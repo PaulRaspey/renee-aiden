@@ -108,6 +108,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="override RENEE_SESSIONS_DIR / default sessions root",
     )
 
+    publish_p = sub.add_parser("publish", help="package and optionally push a session")
+    publish_p.add_argument("session_id", help="session id to publish")
+    publish_p.add_argument(
+        "--include-audio", action="store_true",
+        help="include 48kbps mono Opus derivatives (WAV masters never leave)",
+    )
+    publish_p.add_argument(
+        "--confirm", action="store_true",
+        help="actually commit and push; without this only staging is written",
+    )
+
+    sub.add_parser(
+        "publish-list",
+        help="list sessions marked public but not yet published",
+    )
+
+    unpublish_p = sub.add_parser(
+        "unpublish", help="remove a previously published session from the target repo",
+    )
+    unpublish_p.add_argument("session_id", help="session id to remove")
+
     parser.add_argument(
         "--deploy-config",
         default=str(REPO_ROOT / "configs" / "deployment.yaml"),
@@ -313,6 +334,42 @@ def cmd_highlights(args) -> int:
     return 0
 
 
+def cmd_publish(args) -> int:
+    from src.capture.publish import PublishError, publish_session
+    from src.capture.session_recorder import default_sessions_root
+
+    try:
+        result = publish_session(
+            default_sessions_root(),
+            args.session_id,
+            include_audio=args.include_audio,
+            confirm=args.confirm,
+        )
+    except PublishError as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        return 3
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def cmd_publish_list(args) -> int:
+    from src.capture.publish import list_publishable
+    from src.capture.session_recorder import default_sessions_root
+
+    rows = list_publishable(default_sessions_root())
+    print(json.dumps(rows, indent=2))
+    return 0
+
+
+def cmd_unpublish(args) -> int:
+    from src.capture.publish import unpublish_session
+    from src.capture.session_recorder import default_sessions_root
+
+    result = unpublish_session(default_sessions_root(), args.session_id)
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
 HANDLERS = {
     "wake": cmd_wake,
     "talk": cmd_talk,
@@ -325,6 +382,9 @@ HANDLERS = {
     "check-deps": cmd_check_deps,
     "triage": cmd_triage,
     "highlights": cmd_highlights,
+    "publish": cmd_publish,
+    "publish-list": cmd_publish_list,
+    "unpublish": cmd_unpublish,
 }
 
 

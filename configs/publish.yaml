@@ -1,0 +1,12 @@
+# configs/publish.yaml
+#
+# Target for `renee publish`. PJ controls all of this - the pipeline only
+# reads these values and never overwrites them.
+#
+# Default target is a separate "renee-sessions-public" repo, NOT
+# renee-aiden. Flip `target_repo_url` to whatever remote PJ creates.
+
+target_repo_url: "https://github.com/PaulRaspey/renee-sessions-public.git"
+target_repo_local: "state/renee-sessions-public"
+target_branch: "main"
+commit_message_template: "publish session {session_id}"
