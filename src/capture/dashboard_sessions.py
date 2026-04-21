@@ -82,7 +82,12 @@ def session_detail(sessions_root: Path, session_id: str) -> dict:
     latency = _load_json(session_dir / "latency.json", {"count": 0})
     overlap = _load_json(session_dir / "overlap_events.json", {"events": []})
     eval_scores = _load_json(session_dir / "eval_scores.json", [])
-    notes_path = session_dir / "notes.md"
+    from .review_notes import ensure_notes_exists
+    notes_path = ensure_notes_exists(
+        session_dir,
+        manifest=manifest,
+        flags=flags if isinstance(flags, list) else [],
+    )
     notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
     return {
         "session_id": session_id,

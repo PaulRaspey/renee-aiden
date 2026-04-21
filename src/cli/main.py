@@ -92,6 +92,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="list files that would be exported without copying",
     )
 
+    triage_p = sub.add_parser("triage", help="run the post-session triage pipeline")
+    triage_p.add_argument("session_dir", help="path to a session directory")
+    triage_p.add_argument(
+        "--whisper-model", default="base.en",
+        help="WhisperX model size (default base.en)",
+    )
+
+    highlights_p = sub.add_parser(
+        "highlights",
+        help="regenerate HIGHLIGHTS.md from tagged notes across sessions",
+    )
+    highlights_p.add_argument(
+        "--sessions-root", default=None,
+        help="override RENEE_SESSIONS_DIR / default sessions root",
+    )
+
     parser.add_argument(
         "--deploy-config",
         default=str(REPO_ROOT / "configs" / "deployment.yaml"),
@@ -276,6 +292,27 @@ def cmd_check_deps(args) -> int:
 # -------------------- dispatcher --------------------
 
 
+def cmd_triage(args) -> int:
+    from src.capture.triage import run_triage
+
+    result = run_triage(
+        Path(args.session_dir),
+        whisper_model=args.whisper_model,
+    )
+    print(json.dumps({"flag_count": len(result["flags"]), "flags_path": result["flags_path"]}, indent=2))
+    return 0
+
+
+def cmd_highlights(args) -> int:
+    from src.capture.review_notes import regenerate_highlights
+    from src.capture.session_recorder import default_sessions_root
+
+    root = Path(args.sessions_root) if args.sessions_root else default_sessions_root()
+    result = regenerate_highlights(root)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 HANDLERS = {
     "wake": cmd_wake,
     "talk": cmd_talk,
@@ -286,6 +323,8 @@ HANDLERS = {
     "eval": cmd_eval,
     "export": cmd_export,
     "check-deps": cmd_check_deps,
+    "triage": cmd_triage,
+    "highlights": cmd_highlights,
 }
 
 
