@@ -6,16 +6,16 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20. Phases 1-5 of the burn-in preamble all green. The new src/uahp/ package now ships death certificates with task_id + cause, task failure certificates, dead-agent registry with post-death heartbeat rejection, SQLite replay-detection ledger, MemoryVault-UAHP bridge (snapshots, proofs, death seals), and a QAL attestation chain primitive. Part 2 (heartbeat emission, session capture pipeline, dashboard extensions) remains for a later session.
-**Branch:** feat/uahp-gap-closure (six commits on top of main; merge manually).
+**Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20; session capture pipeline (Part 2) landed 2026-04-20 on feat/session-capture. Phases 1-5 of the burn-in preamble all green. src/capture/ now owns session recording with QAL genesis, review dep detection, triage (WhisperX + Parselmouth + pyannote + latency + fatigue + safety extraction), the dashboard Sessions tab, review notes with #tag highlights, selective GitHub publishing with attestation manifests, and one-command startup. Session 1 will mint the live QAL genesis + global_chain_root.json on first record.
+**Branch:** feat/session-capture (seven commits on top of main after Part 1 merge; merge manually).
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** see git log; feat/uahp-gap-closure carries 6 commits — 4 MiniMax patches, patch 5 (memory wiring), QAL chain, and the docs sweep.
-**Next milestone:** M15 daily burn-in begins after Part 2. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health tab watched intentionally for drift.
+**Last commit:** see git log; feat/session-capture carries 7 commits - session recorder, review deps installer, triage pipeline, dashboard Sessions tab, review notes, GitHub publishing, one-command startup.
+**Next milestone:** M15 daily burn-in begins after Part 2 merge. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health + Sessions tabs watched for drift and triage-flag surprises.
 **Blockers:** Two deferred items in state/m15_readiness.md require the live pod (cold wake, real-bridge latency). Phone-side manual cert trust from prior sessions still outstanding.
 
-**Test summary:** 522 tests passing. Phase 5 added 51 new tests across six new UAHP test files (death certs 7, task failure 6, dead agent registry 6, replay ledger 8, memory wiring 9, QAL chain 15). Phase 1-4 previously added 79 tests (anchor context, daily cap, dashboard, overnight regressions, shutdown rehearsal). 4 pre-existing memory tests still fail on HuggingFace network access only.
+**Test summary:** 657 tests passing. Part 2 added 135 tests across seven new capture test files (session recorder 22, install review deps 21, triage 23, dashboard sessions 28, review notes 14, publish 16, start recording 11). Part 1 added 51 UAHP tests, Phase 1-4 added 79 tests earlier. 4 pre-existing memory tests still fail on HuggingFace network access only.
 
-**M15 readiness:** `state/m15_readiness.md` — 11 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
+**M15 readiness:** `state/m15_readiness.md` - 13 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
 
 ## How to resume
 
@@ -165,6 +165,61 @@ Incidental fixes: none — this module is net new.
 
 ---
 
+## Verified steps (this session: 2026-04-20, Part 2 - session capture)
+
+Part 2 closes the session capture loop the Part 1 QAL chain primitive was waiting on. Everything writes into RENEE_SESSIONS_DIR (default `C:\Users\Epsar\renee-sessions\`) on the OptiPlex; nothing runs pod-side.
+
+### Step 18: Session recorder with QAL chain genesis hook
+Verified 2026-04-20 on matrix.
+Exercised: opt-in start() via flag or RENEE_RECORD=1, 48kHz 16-bit mono WAV capture for mic + renee, bit-for-bit round-trip on canned payloads, KeyboardInterrupt graceful close via context manager, memory snapshot attached + verifiable, first session is genesis (prev_hash all zeros), second session appends (prev_hash links), `global_chain_root.json.bak` created on every write past the first, `verify_chain` green across a 3-session chain concatenation, orchestrator `register_audio_tap(conn_id, mic_cb, renee_cb)` with bit-for-bit parity between consumer and tap, tap-callback failure does not propagate. 22 tests.
+Incidental fixes:
+- `src/orchestrator.py`: added `_audio_taps` dict + `register_audio_tap` / `audio_tap_count`. feed_audio and tts_output_stream fire their registered callbacks before the real sink (ASR, websocket) so taps observe every chunk even if the consumer cancels mid-stream.
+- `src/capture/session_recorder.py`: new module. Chain artifacts are written atomically (tmp + os.replace) and the prior `global_chain_root.json` is copied to `.bak` before each update.
+
+### Step 19: Review dependencies installer
+Verified 2026-04-20 on matrix.
+Exercised: all five deps (whisperx, praat-parselmouth, pyannote.audio, matplotlib, plotly) detected via `importlib.util.find_spec`; missing-deps listing, estimated-download-MB math that scales with whisper model choice, HF_TOKEN / HUGGING_FACE_HUB_TOKEN detection, ffmpeg PATH check, summary CLI returns 0 when clean + 2 when work remains, warning text includes gyan.dev and chocolatey install hints, .bat wrapper references the python module and ffmpeg. 21 tests (all pure-Python; no pip runs).
+Incidental fixes:
+- `scripts/install_review_deps.bat`: is a thin wrapper; the Python module owns detection so tests never need to shell out.
+
+### Step 20: Triage pipeline with fatigue and safety integration
+Verified 2026-04-20 on matrix.
+Exercised: missing whisperx / parselmouth / pyannote imports raise `TriageDepError` with a pointer to the install script (not a raw ImportError trace), pause-flag detection on planted 2.4s gap, high-severity for 2x threshold, pitch-excursion detection with baseline from first 2 min windows, overlap-severity scales with duration (low/medium/high at 0.2s/0.8s/2.0s), mic-silence detection, eval-flag extraction from sycophancy_flag and ai_ism_count, safety-trigger extraction from mock log, fatigue computation on planted decay, latency p50/p95/p99 for known turn timings, end-to-end with multiple planted anomalies, clean session produces empty flag list, ranking is severity-first then timestamp. 23 tests (all runners mocked per clarification 2).
+Incidental fixes: none.
+Manual validation: `docs/triage_validation.md` is the PJ checklist for first-real-run verification since tests never touch real weights.
+
+### Step 21: Metrics dashboard with cross-session trends and presence score
+Verified 2026-04-20 on matrix.
+Exercised: Sessions tab nav button, HTML section, and JS all render; list endpoint returns `[]` on empty root and seeded sessions when populated; trends aggregate flag categories + latency + safety rate per session; disk usage reports session count + free bytes + 80% soft warn; per-session detail includes manifest + flags + prosody + latency + overlap + notes; audio streaming endpoint serves mic.wav and renee.wav with `audio/wav` content-type and rejects bad names to block path traversal; POST /presence_score validates 1..5 with Pydantic, rejects out-of-range with 422, returns 409 after `github_published` is true; notes POST/GET round-trip. 28 tests.
+Incidental fixes:
+- `src/dashboard/config.py`: added optional `sessions_root` (falls back to `default_sessions_root()` when unset).
+- `src/dashboard/server.py`: added sessions routes + tab; path traversal is rejected inside `resolve_session_audio`.
+
+### Step 22: Review notes surface with tag-based highlights
+Verified 2026-04-20 on matrix.
+Exercised: initial notes template includes Overview + one `### [HH:MM:SS]` block per flag with PJ notes stub; ensure_notes_exists is idempotent (first call writes, second call preserves edits); tag regex matches `#harvest` / `#fix` / `#moment` but ignores `#12345` numeric ids and inline suffix like `s1#harvest`; parse_blocks recognizes level-2 and level-3 headings; regenerate_highlights writes both HIGHLIGHTS.md (public only) and HIGHLIGHTS_PRIVATE.md (all tagged blocks), tag order is stable `harvest -> fix -> moment`; dashboard detail creates notes.md on first view and reflects direct-disk edits on next GET; `python -m renee highlights --sessions-root` CLI. 14 tests.
+Incidental fixes:
+- `src/capture/dashboard_sessions.py`: session_detail now calls `ensure_notes_exists` so the template is always present after first view.
+
+### Step 23: Selective GitHub publishing with attestation manifests
+Verified 2026-04-20 on matrix.
+Exercised: hard gate on `manifest.public == true` (PublishError on private), hard gate on `presence_score != None` (PublishError when missing), staging copies JSON + markdown but excludes WAV, staging includes chain_manifest.json with prev_hash (continuity proof), opt-in audio ships only Opus via injected encoder (never WAV), redaction rules applied to all .json/.md/.txt/.yaml files in staging, placeholder redaction_rules.json auto-created on first attempt, publish without --confirm only stages (git runner not called), publish with --confirm calls `git add` / `git commit` / `git push` in order and flips manifest.github_published to true, git failure raises PublishError, unpublish removes target repo directory and flips flag back, publish-list filters private + already-published. 16 tests (git + ffmpeg runners mocked).
+Incidental fixes:
+- `configs/publish.yaml`: new file naming the target renee-sessions-public repo. Pipeline only reads; never overwrites.
+
+### Step 24: One-command startup with recording and dashboard
+Verified 2026-04-20 on matrix.
+Exercised: pod-unreachable path returns exit code 2 and prints the clear "run `python -m renee wake` first" message without starting the bridge or opening the browser; dashboard already running is detected and re-started is skipped; Ctrl+C during wait still terminates the bridge cleanly and triggers triage on the most recent session directory; empty sessions root produces "no session dir found" and skips triage; latest-session finder picks the newest mtime and skips `_publish_staging`; .bat and .ps1 both set RENEE_RECORD=1 and call the runner. 11 tests (all side effects injected, no real subprocess spawns).
+Incidental fixes: none.
+
+### Deferred (Part 2)
+
+- Off-OptiPlex archive: the sessions root is durable on the OptiPlex but not replicated. Sketch a backup target (cloud bucket, or second NAS) before the session count exceeds 30.
+- Audio tap wiring on pod-side orchestrator: the `register_audio_tap` contract is in place and tested with bit-for-bit parity, but `cloud_startup.py` does not yet wire the session recorder in. Production recording needs `cloud_startup.py` to instantiate a SessionRecorder against the live orchestrator's identity + memory_store and call `register_audio_tap(conn_id, rec.on_mic_pcm, rec.on_renee_pcm)` plus `register_transcript_listener(conn_id, rec.on_transcript_async)` per connection. Documented here since the .bat wrapper + env var are ready; the wiring edit is one-file and non-invasive.
+- MemoryVault encryption, clip library, phone dashboard, off-OptiPlex backup: explicitly out of scope for Part 2. PJ decides after session 1 which to prioritize.
+
+---
+
 ## What's done (pre-PWA, left for context)
 
 - [x] Architecture spec + 9 stack deep dives (including cloud deployment)
@@ -185,7 +240,11 @@ Incidental fixes: none — this module is net new.
 
 ## What's next
 
-- [ ] UAHP gap closure Part 2: heartbeat emission from each agent, session capture pipeline that mints the QAL chain genesis on first boot and appends per session, dashboard surface for dead agents + replay-ledger stats.
+- [x] UAHP gap closure Part 2 (session capture pipeline + dashboard Sessions tab + QAL chain genesis on first record) - landed 2026-04-20 on feat/session-capture.
+- [ ] Wire the session recorder into `cloud_startup.py` so real recordings stream on pod-side orchestrator taps (see "Deferred (Part 2)" above).
+- [ ] Off-OptiPlex archive plan: sessions durable on OptiPlex, not replicated. Sketch backup target before session count exceeds 30.
+- [ ] Install review deps on the OptiPlex: `scripts/install_review_deps.bat` then accept the pyannote terms on HF and set HF_TOKEN.
+- [ ] UAHP heartbeat emission from each agent (Part 3) so dead-agent registry + replay ledger see live traffic.
 - [ ] Install audio deps (`sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `runpod`) for live M0/M1/M14 audio-side runs.
 - [ ] First RunPod spin-up: run `scripts/volume_setup.py`, then `python -m renee wake`.
 - [ ] M15 long-running test, overnight conversation session with eval dashboard snapshots every hour.
@@ -204,4 +263,5 @@ Incidental fixes: none — this module is net new.
 - **Node 24 `navigator` is read-only.** Any Node-based shim for `client.js` must use `Object.defineProperty(globalThis, 'navigator', {...})`, not `global.navigator = {...}`. Fixed in `tests/test_client_js_lifecycle.py`.
 - **Qwen-on-Groq leaks ip_reminder tags.** Fixed in the filter, but if you swap models double-check.
 - **Memory encryption off by default.** `MemoryVault` exists but isn't wired into the SQLite memory store yet.
-- **QAL chain continuity depends on the `global_chain_root` reference not being deleted.** If lost, the chain breaks and session continuity cannot be cryptographically proven from that point onward. Part 2 of this integration (session capture pipeline) will establish the `global_chain_root` location and back it up on write. Until then, `src/uahp/qal_chain.py` is a library; no persistent chain exists on disk.
+- **QAL chain continuity depends on the `global_chain_root` reference not being deleted.** If lost, the chain breaks and session continuity cannot be cryptographically proven from that point onward. Part 2 closes the loop: `src/capture/session_recorder.py` writes `<RENEE_SESSIONS_DIR>/global_chain_root.json` on every session and also writes `global_chain_root.json.bak` with the prior contents, so a crash mid-rewrite leaves a last-known-good. Both files together + the per-session `attestation_chain.jsonl` are the chain's load-bearing artifacts. The off-OptiPlex archive plan must cover all three, not just the sessions themselves.
+- **`configs/publish.yaml` names a target repo that does not exist yet.** Default points at `renee-sessions-public` which PJ has not created. `renee publish --confirm` will fail on the push step until the repo exists and `state/renee-sessions-public/` is a clone of it. Until PJ creates the repo, `renee publish <session>` without `--confirm` works end-to-end (writes staging only) for human review.
