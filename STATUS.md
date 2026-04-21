@@ -6,16 +6,16 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M15 pre-burn-in guardrails wired (2026-04-19). Phases 1-4 of the burn-in preamble all green. Documentation cleaned up, reality-anchor context classifier live, 120-minute daily cap enforced on the bridge, observability dashboard serving localhost:7860, overnight-TODO regressions pinned, readiness report written.
-**Branch:** main
+**Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20. Phases 1-5 of the burn-in preamble all green. The new src/uahp/ package now ships death certificates with task_id + cause, task failure certificates, dead-agent registry with post-death heartbeat rejection, SQLite replay-detection ledger, MemoryVault-UAHP bridge (snapshots, proofs, death seals), and a QAL attestation chain primitive. Part 2 (heartbeat emission, session capture pipeline, dashboard extensions) remains for a later session.
+**Branch:** feat/uahp-gap-closure (six commits on top of main; merge manually).
 **Repo:** https://github.com/PaulRaspey/renee-aiden (private)
-**Last commit:** see git log; four pre-M15 commits plus shutdown module land on top of the April 18 sweep.
-**Next milestone:** M15 daily burn-in begins. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health tab watched intentionally for drift.
+**Last commit:** see git log; feat/uahp-gap-closure carries 6 commits — 4 MiniMax patches, patch 5 (memory wiring), QAL chain, and the docs sweep.
+**Next milestone:** M15 daily burn-in begins after Part 2. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health tab watched intentionally for drift.
 **Blockers:** Two deferred items in state/m15_readiness.md require the live pod (cold wake, real-bridge latency). Phone-side manual cert trust from prior sessions still outstanding.
 
-**Test summary:** 471 tests passing. Phase 1-4 added 79 new tests (anchor context, daily cap, dashboard, overnight regressions, shutdown rehearsal). 4 pre-existing memory tests still fail on HuggingFace network access only.
+**Test summary:** 522 tests passing. Phase 5 added 51 new tests across six new UAHP test files (death certs 7, task failure 6, dead agent registry 6, replay ledger 8, memory wiring 9, QAL chain 15). Phase 1-4 previously added 79 tests (anchor context, daily cap, dashboard, overnight regressions, shutdown rehearsal). 4 pre-existing memory tests still fail on HuggingFace network access only.
 
-**M15 readiness:** `state/m15_readiness.md` — 8 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
+**M15 readiness:** `state/m15_readiness.md` — 11 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
 
 ## How to resume
 
@@ -111,6 +111,53 @@ Exercised: contract test that walks every cloud.* key load_deployment/cmd_proxy 
 Incidental fixes:
 - `configs/deployment.yaml`: `cloud_llm.groq.model` was `qwen-3-32b` but `LLMRouter` defaults to `qwen/qwen3-32b`. Changed the yaml to match. Same for `cloud_llm.anthropic.model` (`claude-sonnet-4-6` -> `claude-sonnet-4-5`). Added a drift-watch note explaining that the router reads env vars, not this block, so the values are informational until yaml-driven routing lands.
 
+---
+
+## Verified steps (this session: 2026-04-20)
+
+UAHP gap closure, Part 1. Closes the items Step 9 flagged as deferred (death certs, replay ledger, QAL chain) and adds MemoryVault-UAHP wiring that architecture/07 called for but the code had never implemented. Architectural decision: Option A (inline in a new `src/uahp/` package) because `requirements.txt` keeps the broken PyPI `uahp` wheel commented out and `src/identity/uahp_identity.py` is the vendored local module. One HMAC-SHA256 identity primitive across the stack; every new module imports `AgentIdentity` from the existing file.
+
+### Step 12: UAHP death certificates with task_id and cause (MiniMax patch 1)
+Verified 2026-04-20 on matrix.
+Exercised: sign/verify roundtrip with all fields populated, tamper rejection on task_id and cause mutations, cross-agent forgery rejection, all 9 DeathCause enum values produce valid certificates, backward-compatibility defaults (task_id="unknown", cause=NATURAL) still sign and verify. 7 tests.
+Incidental fixes:
+- Dropped the duplicate `AgentIdentity` dataclass the patch shipped, in favour of the canonical one in `src/identity/uahp_identity.py`.
+- Left `renee/shutdown.py` untouched: its receipt-based `issue_death_certificate(state_dir, persona)` has a different shape and its tests pin the disk format. The MiniMax cert lives in `src/uahp/death_certs.py`; the two coexist in separate module namespaces.
+
+### Step 13: UAHP task failure certificates (MiniMax patch 2)
+Verified 2026-04-20 on matrix.
+Exercised: roundtrip with error_message + error_code + metadata, tamper rejection on error_message and task_id, cross-agent forgery rejection, custom error_code preserved through roundtrip, default error_code "UNKNOWN" when unspecified. 6 tests.
+Incidental fixes:
+- Same AgentIdentity dedup as Step 12.
+
+### Step 14: UAHP dead-agent registry with post-death heartbeat rejection (MiniMax patch 3)
+Verified 2026-04-20 on matrix.
+Exercised: mark_dead + is_alive, idempotent re-mark with a different cert (still dead, no exception), accept_heartbeat on live agent (no exception), accept_heartbeat on dead agent raises HeartbeatRejectedPostMortem with the agent_id, registry survives process restart (open → close → re-open on same SQLite file → still dead), multi-agent isolation (A dead, B alive, heartbeats from B still accepted). 6 tests.
+Incidental fixes:
+- `DeathCertificate` import taken from `src.uahp.death_certs` so the registry consumes the same dataclass the patch-1 cert produces.
+
+### Step 15: UAHP replay-detection ledger with retention window (MiniMax patch 4)
+Verified 2026-04-20 on matrix.
+Exercised: fresh receipt recording, in-window duplicate raises `ReplayDetected`, post-window duplicate silently bumps seen_count (confirms intentional patch-4 semantics: lock window is strict-reject, retention_days is audit retention), 10-thread concurrent recording of distinct receipts all succeed, 10-thread concurrent recording of the same receipt yields exactly one success + nine `ReplayDetected` rejections, stats() reports correct per-agent breakdown, prune() with monkey-patched `time.time` removes entries past retention_days, ledger survives process restart. 8 tests.
+Incidental fixes:
+- Clarified the module docstring to document the retention_lock_seconds vs retention_days distinction that was implicit in the patch.
+
+### Step 16: MemoryVault-UAHP bridge (MiniMax patch 5)
+Verified 2026-04-20 on matrix.
+Schema assumption from the patch confirmed against `src/memory/store.py`: the `memories` table has a `tier` column and `recent_turns(n)` returns dicts keyed `user`/`assistant`. No patch adjustments needed on that front.
+Exercised: signed memory snapshot roundtrip, tamper rejection on memory_count, cross-agent forgery rejection, snapshot reflects actual memory count after raw-SQL inserts of 3 rows across 2 tiers, latest_memory_hash reflects the most recent turn, memory proof roundtrip + tamper detection, seal_memory_to_death writes a memory_seal block and the re-signed cert verifies. 9 tests.
+Incidental fixes:
+- Replaced `__import__("sqlite3").connect(...)` with a proper top-of-file `import sqlite3`.
+- Added `verify_sealed_death` helper so callers can verify the sealed cert without re-deriving the payload.
+- `seal_memory_to_death` no longer mutates its input dict — it operates on a copy and returns the sealed dict, so the original is reusable.
+- Guarded `recent_turns` output with `.get("assistant")` / `.get("user")` so an absent key produces "none" rather than a KeyError.
+- Test fixture inserts memory rows via raw SQL so the sentence-transformers model never loads; keeps these tests off the HuggingFace network path that `test_memory.py` already owns.
+
+### Step 17: QAL attestation chain with tamper detection
+Verified 2026-04-20 on matrix.
+Exercised: genesis with all-zero `prev_hash`, append chains of length 2, 5, and 100 all verify clean, `find_tamper` on `action` mutation at idx 3 returns 3, `find_tamper` on `state_hash` mutation at idx 7 returns 7, `find_tamper` on mid-chain swap flags the first broken link, cross-agent forgery rejection (chain signed by Alice fails to verify under Bob's identity), cross-chain `state_hash` collision report surfaces matches without treating them as errors, JSONL serialize + load roundtrip re-verifies, empty chain and single-attestation chain are vacuously valid, `load_chain` on corrupt JSONL raises `ChainLoadError` with the line number (not a raw `JSONDecodeError`), missing-field and missing-file also raise `ChainLoadError` with clear messages, `hash_attestation` detects single-byte mutations. 15 tests.
+Incidental fixes: none — this module is net new.
+
 ### Deferred
 
 - Two-tailnet-node live check: Paul opens `https://100.78.253.97:8766/` on his phone, accepts the cert, then installs the CA from `/cert`. I print the URL and the QR; this is the one step that cannot be scripted from the OptiPlex.
@@ -138,7 +185,7 @@ Incidental fixes:
 
 ## What's next
 
-- [ ] UAHP/QAL/Groq-fallback/deployment.yaml drift sweep (task #19).
+- [ ] UAHP gap closure Part 2: heartbeat emission from each agent, session capture pipeline that mints the QAL chain genesis on first boot and appends per session, dashboard surface for dead agents + replay-ledger stats.
 - [ ] Install audio deps (`sounddevice`, `webrtcvad`, `opuslib`, `faster-whisper`, `runpod`) for live M0/M1/M14 audio-side runs.
 - [ ] First RunPod spin-up: run `scripts/volume_setup.py`, then `python -m renee wake`.
 - [ ] M15 long-running test, overnight conversation session with eval dashboard snapshots every hour.
@@ -148,7 +195,7 @@ Incidental fixes:
 
 - Phone-side install of the self-signed CA from `https://<matrix-tailscale>:8766/cert`. No way to script; requires tapping "Install" in iOS Safari then "Trust" in Settings, General, About, Certificate Trust Settings.
 - Do you want Gemma-primary routing or the current Groq-primary? The meta-harness said "Primary local model Gemma 4 E4B on T400, fallback Qwen 3 32B via Groq API". `decide_backend` currently returns `"groq"` whenever the Groq key is set. Flipping it to Gemma-primary on the OptiPlex is one `if` change; the cascade fallback I just added handles Gemma going offline. Leaving as Groq-primary until you confirm.
-- UAHP feature gap: `architecture/07_uahp_integration.md` calls for heartbeats, signed death certificates, a supervising agent, replay-detection ledger, and QAL attestation. None of these ship today. Do we build them into M15 or defer until post-launch?
+- UAHP feature gap — **partially closed** (2026-04-20). Part 1 shipped death certificates with cause, task failure certificates, dead-agent registry, replay-detection ledger, memory-vault wiring, and the QAL attestation chain primitive (see Steps 12-17). Heartbeat emission, the session capture pipeline that actually mints the QAL genesis, and dashboard surfaces for these are Part 2. Do we run Part 2 before the first M15 burn-in window, or defer to post-launch?
 
 ## Known risks / gotchas
 
@@ -157,3 +204,4 @@ Incidental fixes:
 - **Node 24 `navigator` is read-only.** Any Node-based shim for `client.js` must use `Object.defineProperty(globalThis, 'navigator', {...})`, not `global.navigator = {...}`. Fixed in `tests/test_client_js_lifecycle.py`.
 - **Qwen-on-Groq leaks ip_reminder tags.** Fixed in the filter, but if you swap models double-check.
 - **Memory encryption off by default.** `MemoryVault` exists but isn't wired into the SQLite memory store yet.
+- **QAL chain continuity depends on the `global_chain_root` reference not being deleted.** If lost, the chain breaks and session continuity cannot be cryptographically proven from that point onward. Part 2 of this integration (session capture pipeline) will establish the `global_chain_root` location and back it up on write. Until then, `src/uahp/qal_chain.py` is a library; no persistent chain exists on disk.

@@ -530,6 +530,190 @@ def check_greet_once_then_silent(tmp_root: Path) -> CheckResult:
     )
 
 
+def check_uahp_supervisor_hardening(tmp_root: Path) -> CheckResult:
+    """Gap-closure for architecture/07_uahp_integration.md: death cert
+    task_id+cause, task failure certs, dead-agent registry with post-death
+    heartbeat rejection, and replay-detection ledger. Exercises each as a
+    sign-verify-tamper roundtrip so the readiness report proves the
+    primitives actually work, not just that they import."""
+    from src.identity.uahp_identity import create_identity
+    from src.uahp.dead_agent_registry import (
+        DeadAgentRegistry,
+        HeartbeatRejectedPostMortem,
+    )
+    from src.uahp.death_certs import (
+        DeathCause,
+        issue_death_certificate,
+        verify_death_certificate,
+    )
+    from src.uahp.replay_ledger import ReplayDetected, ReplayLedger
+    from src.uahp.task_failure import (
+        issue_task_failure_certificate,
+        verify_task_failure_certificate,
+    )
+
+    scratch = tmp_root / "uahp-supervisor"
+    scratch.mkdir(parents=True, exist_ok=True)
+
+    ident = create_identity("renee_voice")
+    results: dict[str, bool] = {}
+
+    # Death cert: sign, verify, tamper-reject.
+    cert = issue_death_certificate(
+        ident, task_id="burnin-1", cause=DeathCause.HEARTBEAT_TIMEOUT
+    )
+    results["death_cert_verify"] = verify_death_certificate(ident, cert)
+    tampered = type(cert)(**{**cert.__dict__, "cause": DeathCause.OOM})
+    results["death_cert_tamper_rejected"] = not verify_death_certificate(
+        ident, tampered
+    )
+
+    # Task failure cert: sign, verify, cross-agent rejection.
+    tfail = issue_task_failure_certificate(
+        ident, task_id="tts-1", error_message="cuda oom", error_code="OOM"
+    )
+    results["task_failure_verify"] = verify_task_failure_certificate(ident, tfail)
+    results["task_failure_cross_agent_rejected"] = (
+        not verify_task_failure_certificate(create_identity("mallory"), tfail)
+    )
+
+    # Dead-agent registry: mark + heartbeat rejection.
+    reg = DeadAgentRegistry(scratch / "dead.db")
+    reg.mark_dead("renee_voice", cert)
+    try:
+        reg.accept_heartbeat("renee_voice", {"ts": 1.0})
+        results["dead_agent_rejects_heartbeat"] = False
+    except HeartbeatRejectedPostMortem:
+        results["dead_agent_rejects_heartbeat"] = True
+    results["dead_agent_other_still_alive"] = reg.is_alive("renee_memory")
+
+    # Replay ledger: first record ok, second raises.
+    ledger = ReplayLedger(scratch / "ledger.db", retention_lock_seconds=60.0)
+    ledger.record("receipt-xyz", "renee_voice")
+    try:
+        ledger.record("receipt-xyz", "renee_voice")
+        results["replay_detected"] = False
+    except ReplayDetected:
+        results["replay_detected"] = True
+
+    passed = all(results.values())
+    return CheckResult(
+        name="UAHP supervisor hardening (death certs, task failure, heartbeat rejection, replay ledger)",
+        passed=passed,
+        detail=(
+            "Exercised sign/verify on death certs (with task_id + cause) and "
+            "task failure certs, tamper rejection on both, post-death "
+            "heartbeat rejection via DeadAgentRegistry, and replay detection "
+            "via the ledger's retention_lock window. Session 1 will wire "
+            "these into the persona supervisor."
+        ),
+        metrics=results,
+    )
+
+
+def check_uahp_memory_wiring(tmp_root: Path) -> CheckResult:
+    """MemoryVault-UAHP bridge: snapshots, proofs, death seal. Uses a
+    temporary MemoryStore so no live memory data is touched."""
+    from src.identity.uahp_identity import create_identity
+    from src.memory.store import MemoryStore
+    from src.uahp.death_certs import DeathCause, issue_death_certificate
+    from src.uahp.memory_wiring import (
+        attach_memory_proof,
+        emit_memory_snapshot,
+        seal_memory_to_death,
+        verify_memory_proof,
+        verify_memory_snapshot,
+        verify_sealed_death,
+    )
+
+    scratch = tmp_root / "uahp-memory"
+    scratch.mkdir(parents=True, exist_ok=True)
+    store = MemoryStore(persona_name="readiness", state_dir=scratch)
+    store.write_turn("hi", "hello there", mood=None)
+
+    ident = create_identity("renee_memory")
+    snap = emit_memory_snapshot(store, ident, session_id="readiness-snap")
+    proof = attach_memory_proof(store, ident, receipt_id="readiness-receipt")
+    cert = issue_death_certificate(
+        ident, task_id="shutdown", cause=DeathCause.VOLUNTARY_SHUTDOWN
+    )
+    sealed = seal_memory_to_death(store, ident, cert.to_dict())
+
+    results = {
+        "snapshot_verifies": verify_memory_snapshot(ident, snap),
+        "proof_verifies": verify_memory_proof(ident, proof),
+        "sealed_death_verifies": verify_sealed_death(ident, sealed),
+        "sealed_death_contains_memory_seal": "memory_seal" in sealed,
+    }
+    passed = all(results.values())
+    return CheckResult(
+        name="MemoryVault-UAHP bridge (snapshots, proofs, death seals)",
+        passed=passed,
+        detail=(
+            "Snapshot + proof + sealed-death roundtrip on a scratch "
+            "MemoryStore with one turn on file. Death cert has memory_seal "
+            "block and re-signs under the same identity."
+        ),
+        metrics=results,
+    )
+
+
+def check_qal_chain(tmp_root: Path) -> CheckResult:
+    """QAL attestation chain: genesis, append, verify, find_tamper. The
+    live chain genesis is deferred to session 1 — this check only
+    validates the primitive."""
+    from src.identity.uahp_identity import create_identity
+    from src.uahp.qal_chain import (
+        append,
+        create_genesis,
+        find_tamper,
+        load_chain,
+        serialize_chain,
+        verify_chain,
+    )
+
+    scratch = tmp_root / "qal-chain"
+    scratch.mkdir(parents=True, exist_ok=True)
+    ident = create_identity("renee_persona")
+    genesis = create_genesis(ident, {"session": 0}, "session-0-start")
+    chain = [genesis]
+    for i in range(1, 5):
+        chain.append(append(chain[-1], ident, {"session": i}, f"session-{i}"))
+
+    clean = verify_chain(chain, ident)
+    # Tamper then find.
+    tampered = list(chain)
+    from src.uahp.qal_chain import Attestation
+    tampered[2] = Attestation(
+        **{**tampered[2].__dict__, "action": "wrong"}
+    )
+    tamper_idx = find_tamper(tampered, ident)
+
+    # JSONL roundtrip.
+    chain_path = scratch / "chain.jsonl"
+    serialize_chain(chain, chain_path)
+    loaded = load_chain(chain_path)
+    roundtrip_ok = verify_chain(loaded, ident)
+
+    results = {
+        "clean_chain_verifies": clean,
+        "tamper_found_at_expected_index": tamper_idx == 2,
+        "jsonl_roundtrip_verifies": roundtrip_ok,
+    }
+    passed = all(results.values())
+    return CheckResult(
+        name="QAL attestation chain (genesis, append, verify, find_tamper, JSONL)",
+        passed=passed,
+        detail=(
+            "Built a 5-attestation chain under renee_persona, verified it "
+            "clean, mutated idx 2 and confirmed find_tamper returns 2, "
+            "serialized to JSONL and re-verified after load. Session 1 will "
+            "mint the live genesis and establish global_chain_root."
+        ),
+        metrics=results,
+    )
+
+
 def check_dashboard_endpoints(tmp_root: Path) -> CheckResult:
     from fastapi.testclient import TestClient
     import yaml
@@ -623,6 +807,9 @@ def run_all(ledger: Ledger, tmp_root: Path) -> None:
     _run("Jitter buffer", check_jitter_buffer_contract)
     _run("Greet-on-connect", lambda: check_greet_once_then_silent(tmp_root))
     _run("Dashboard", lambda: check_dashboard_endpoints(tmp_root))
+    _run("UAHP supervisor hardening", lambda: check_uahp_supervisor_hardening(tmp_root))
+    _run("MemoryVault-UAHP bridge", lambda: check_uahp_memory_wiring(tmp_root))
+    _run("QAL attestation chain", lambda: check_qal_chain(tmp_root))
 
 
 def main() -> int:
