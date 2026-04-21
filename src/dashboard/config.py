@@ -22,6 +22,7 @@ class DashboardConfig:
     persona: str = "renee"
     mood_axis_max_delta: float = 0.2
     confirm_token: str = "confirm"
+    sessions_root: Optional[str] = None
 
     @property
     def is_loopback(self) -> bool:
@@ -56,6 +57,7 @@ class DashboardConfig:
             cfg.validate()
             return cfg
         raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        sessions_root_raw = raw.get("sessions_root")
         cfg = cls(
             bind_host=str(raw.get("bind_host") or "127.0.0.1"),
             port=int(raw.get("port") or 7860),
@@ -65,6 +67,7 @@ class DashboardConfig:
             persona=str(raw.get("persona") or "renee"),
             mood_axis_max_delta=float(raw.get("mood_axis_max_delta") or 0.2),
             confirm_token=str(raw.get("confirm_token") or "confirm"),
+            sessions_root=str(sessions_root_raw) if sessions_root_raw else None,
         )
         cfg.validate()
         return cfg

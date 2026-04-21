@@ -21,9 +21,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
+from ..capture import dashboard_sessions as sessions_mod
+from ..capture.dashboard_sessions import PresenceScoreLockedError
+from ..capture.session_recorder import default_sessions_root
 from .agent import DashboardAgent
 from .audit import DashboardAuditLog
 from .config import DashboardConfig
@@ -98,6 +101,14 @@ class PausePayload(BaseModel):
     confirm: Optional[str] = None
 
 
+class PresenceScorePayload(BaseModel):
+    score: int = Field(..., ge=1, le=5)
+
+
+class SessionNotesPayload(BaseModel):
+    notes: str
+
+
 # ---------------------------------------------------------------------------
 # app factory
 # ---------------------------------------------------------------------------
@@ -122,6 +133,7 @@ def build_app(
     audit = DashboardAuditLog(state_dir / "dashboard_actions.db")
     journal = M15Journal(state_dir / "m15_journal.db")
     agent = DashboardAgent(state_dir)
+    sessions_root = Path(cfg.sessions_root) if cfg.sessions_root else default_sessions_root()
 
     persona_yaml = config_dir / f"{cfg.persona}.yaml"
     safety_yaml = config_dir / "safety.yaml"
@@ -455,6 +467,86 @@ def build_app(
         return m.session_summary()
 
     # ------------------------------------------------------------------
+    # sessions tab
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/list")
+    async def api_sessions_list() -> dict:
+        return {"sessions": sessions_mod.list_sessions(sessions_root)}
+
+    @app.get("/api/sessions/trends")
+    async def api_sessions_trends() -> dict:
+        return sessions_mod.session_trends(sessions_root)
+
+    @app.get("/api/sessions/disk_usage")
+    async def api_sessions_disk_usage() -> dict:
+        return sessions_mod.disk_usage(sessions_root)
+
+    @app.get("/api/sessions/{session_id}/detail")
+    async def api_sessions_detail(session_id: str) -> dict:
+        try:
+            return sessions_mod.session_detail(sessions_root, session_id)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.get("/api/sessions/{session_id}/audio/{name}")
+    async def api_sessions_audio(session_id: str, name: str):
+        try:
+            path = sessions_mod.resolve_session_audio(
+                sessions_root, session_id, name,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return FileResponse(
+            str(path),
+            media_type="audio/wav",
+            filename=name,
+        )
+
+    @app.post("/api/sessions/{session_id}/presence_score")
+    async def api_sessions_presence(session_id: str, payload: PresenceScorePayload) -> dict:
+        try:
+            manifest = sessions_mod.set_presence_score(
+                sessions_root, session_id, int(payload.score),
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except PresenceScoreLockedError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        audit.record(
+            field=f"sessions.{session_id}.presence_score",
+            old_value="",
+            new_value=int(payload.score),
+            confirmed=True,
+            actor="pj",
+        )
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "presence_score": manifest.get("presence_score"),
+        }
+
+    @app.post("/api/sessions/{session_id}/notes")
+    async def api_sessions_notes(session_id: str, payload: SessionNotesPayload) -> dict:
+        session_dir = sessions_root / session_id
+        if not (session_dir / "session_manifest.json").exists():
+            raise HTTPException(status_code=404, detail="session not found")
+        notes_path = session_dir / "notes.md"
+        notes_path.write_text(payload.notes, encoding="utf-8")
+        audit.record(
+            field=f"sessions.{session_id}.notes",
+            old_value="",
+            new_value={"bytes": len(payload.notes)},
+            confirmed=True,
+            actor="pj",
+        )
+        return {"ok": True, "session_id": session_id, "bytes": len(payload.notes)}
+
+    # ------------------------------------------------------------------
     # audit trail (meta)
     # ------------------------------------------------------------------
 
@@ -563,6 +655,7 @@ _SPA_HTML = """<!doctype html>
   <button data-tab="logs">Logs</button>
   <button data-tab="health">Health</button>
   <button data-tab="eval">Eval</button>
+  <button data-tab="sessions">Sessions</button>
  </nav>
  <span id="status" style="margin-left:auto;"><small>&nbsp;</small></span>
 </header>
@@ -675,12 +768,34 @@ _SPA_HTML = """<!doctype html>
    <a id="eval-link" target="_blank">Open nightly HTML dashboard</a>
   </div>
  </section>
+
+ <section id="tab-sessions">
+  <div class="card">
+   <h3>Disk usage</h3>
+   <div id="sessions-disk"></div>
+  </div>
+  <div class="card">
+   <h3>Cross-session trends</h3>
+   <div id="sessions-trends"></div>
+  </div>
+  <div class="card">
+   <h3>Sessions</h3>
+   <table id="sessions-table">
+    <thead><tr><th>session</th><th>date</th><th>duration</th><th>backend</th><th>flags</th><th>presence</th><th>publish</th></tr></thead>
+    <tbody id="sessions-rows"><tr><td colspan="7"><small>loading...</small></td></tr></tbody>
+   </table>
+  </div>
+  <div class="card" id="session-detail-card" style="display:none">
+   <h3>Session detail <small id="session-detail-id"></small></h3>
+   <div id="session-detail-body"></div>
+  </div>
+ </section>
 </main>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
-const tabs = ["live", "tuning", "logs", "health", "eval"];
+const tabs = ["live", "tuning", "logs", "health", "eval", "sessions"];
 let tuningState = null;
 
 $$("nav button").forEach(b => b.onclick = () => {
@@ -702,6 +817,7 @@ async function refreshTab(name) {
   if (name === "logs") { await loadLogs(); }
   if (name === "health") { await loadHealth(); }
   if (name === "eval") { await loadEval(); }
+  if (name === "sessions") { await loadSessions(); }
 }
 
 async function loadLive() {
@@ -833,6 +949,148 @@ async function loadEval() {
   const e = await api("/api/eval/dashboard_path");
   $("#eval-link").style.display = e.exists ? 'inline' : 'none';
   $("#eval-link").textContent = e.exists ? `Open nightly HTML: ${e.path}` : '';
+}
+
+function fmtDuration(s) {
+  if (!s || s <= 0) return "-";
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s - m * 60);
+  return `${m}m${sec.toString().padStart(2,'0')}s`;
+}
+
+function fmtBytes(b) {
+  if (!b || b <= 0) return "0 B";
+  const u = ["B","KB","MB","GB","TB"];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i += 1; }
+  return `${b.toFixed(1)} ${u[i]}`;
+}
+
+async function loadSessions() {
+  const disk = await api("/api/sessions/disk_usage");
+  let warn = disk.soft_warn_at_80pct ? '<span class="status-warn">(&gt;80% used)</span>' : '';
+  $("#sessions-disk").innerHTML = `
+    <div>sessions total: ${fmtBytes(disk.sessions_total_bytes)} (${disk.session_count} sessions)</div>
+    <div>free space: ${fmtBytes(disk.free_bytes)} / ${fmtBytes(disk.total_drive_bytes)} ${warn}</div>
+    <div>avg session: ${fmtBytes(disk.avg_session_bytes)}; estimated runway: ${disk.days_of_runway} sessions</div>
+  `;
+
+  const trends = await api("/api/sessions/trends");
+  if (!trends.count) {
+    $("#sessions-trends").innerHTML = '<small>no sessions captured yet</small>';
+  } else {
+    const last7 = trends.sessions.slice(0, 7);
+    const rows = last7.map(s => `<tr>
+      <td>${s.session_id}</td>
+      <td>${s.flag_total}</td>
+      <td>${(s.latency_p50_s||0).toFixed(2)}</td>
+      <td>${(s.latency_p95_s||0).toFixed(2)}</td>
+      <td>${s.safety_count}</td>
+      <td>${s.overlap_count}</td>
+      <td>${s.presence_score ?? '-'}</td>
+    </tr>`).join("");
+    $("#sessions-trends").innerHTML = `<table>
+      <thead><tr><th>session</th><th>flags</th><th>p50</th><th>p95</th><th>safety</th><th>overlap</th><th>presence</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  const list = await api("/api/sessions/list");
+  if (!list.sessions.length) {
+    $("#sessions-rows").innerHTML = '<tr><td colspan="7"><small>no sessions yet</small></td></tr>';
+  } else {
+    $("#sessions-rows").innerHTML = list.sessions.map(s => {
+      const pub = s.github_published ? 'published' : (s.public ? 'public' : 'private');
+      return `<tr data-session-id="${s.session_id}" style="cursor:pointer">
+        <td>${s.session_id}</td>
+        <td>${(s.start_time||'').slice(0,10)}</td>
+        <td>${fmtDuration(s.duration_s)}</td>
+        <td>${s.backend_used || ''}</td>
+        <td>${s.flag_count}</td>
+        <td>${s.presence_score ?? '-'}</td>
+        <td>${pub}</td>
+      </tr>`;
+    }).join("");
+    $$("#sessions-rows tr").forEach(tr => {
+      tr.onclick = () => loadSessionDetail(tr.dataset.sessionId);
+    });
+  }
+}
+
+async function loadSessionDetail(sessionId) {
+  const d = await api(`/api/sessions/${encodeURIComponent(sessionId)}/detail`);
+  $("#session-detail-card").style.display = 'block';
+  $("#session-detail-id").textContent = sessionId;
+  const locked = d.manifest.github_published;
+  const flagRows = d.flags.map(f => {
+    const ts = f.timestamp !== null && f.timestamp !== undefined
+      ? `<a href="#" data-ts="${f.timestamp}" class="flag-ts">${f.timestamp.toFixed(1)}s</a>`
+      : '-';
+    return `<tr><td>${ts}</td><td>${f.category}</td><td>${f.severity}</td><td>${f.description}</td></tr>`;
+  }).join("");
+  $("#session-detail-body").innerHTML = `
+    <div class="row">
+      <div class="card" style="flex:1">
+        <h4>Audio</h4>
+        <audio id="sess-mic" controls src="${d.mic_wav_url}"></audio>
+        <div><small>mic.wav</small></div>
+        <audio id="sess-renee" controls src="${d.renee_wav_url}"></audio>
+        <div><small>renee.wav</small></div>
+      </div>
+      <div class="card" style="flex:1">
+        <h4>Latency</h4>
+        <div>count: ${d.latency.count||0}</div>
+        <div>p50: ${(d.latency.p50_s||0).toFixed(2)}s</div>
+        <div>p95: ${(d.latency.p95_s||0).toFixed(2)}s</div>
+        <div>p99: ${(d.latency.p99_s||0).toFixed(2)}s</div>
+      </div>
+      <div class="card" style="flex:1">
+        <h4>Presence score</h4>
+        <input type="number" min="1" max="5" id="presence-input"
+               value="${d.manifest.presence_score ?? ''}" ${locked ? 'disabled' : ''}>
+        <button class="action" id="presence-save" ${locked ? 'disabled' : ''}>Save</button>
+        ${locked ? '<div><small class="status-warn">locked after publish</small></div>' : ''}
+      </div>
+    </div>
+    <div class="card">
+      <h4>Flags (${d.flags.length})</h4>
+      <table><thead><tr><th>ts</th><th>category</th><th>severity</th><th>description</th></tr></thead>
+      <tbody>${flagRows || '<tr><td colspan="4"><small>no flags</small></td></tr>'}</tbody></table>
+    </div>
+    <div class="card">
+      <h4>Notes</h4>
+      <textarea id="session-notes" rows="8" style="width:100%">${d.notes}</textarea>
+      <button class="action" id="notes-save">Save notes</button>
+    </div>
+  `;
+  const preroll = 5.0;
+  $$("#session-detail-body .flag-ts").forEach(a => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const ts = Math.max(0, parseFloat(a.dataset.ts) - preroll);
+      const player = $("#sess-renee");
+      if (player) { player.currentTime = ts; player.play(); }
+    };
+  });
+  if (!locked) {
+    $("#presence-save").onclick = async () => {
+      const val = parseInt($("#presence-input").value, 10);
+      try {
+        await api(`/api/sessions/${encodeURIComponent(sessionId)}/presence_score`, {
+          method: "POST", body: JSON.stringify({score: val}),
+        });
+        await loadSessions();
+        await loadSessionDetail(sessionId);
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    };
+  }
+  $("#notes-save").onclick = async () => {
+    const body = JSON.stringify({notes: $("#session-notes").value});
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/notes`, {
+      method: "POST", body,
+    });
+  };
 }
 
 refreshTab("live");
