@@ -177,6 +177,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="run all the launcher's pre-flight checks (tailscale, pod, beacon, cap) and exit",
     )
 
+    sub.add_parser(
+        "version",
+        help="print the renee build version + key dependency versions",
+    )
+
+    fetch_p = sub.add_parser(
+        "fetch-logs",
+        help="pull /workspace/state/logs/conversations/ from the pod via SFTP",
+    )
+    fetch_p.add_argument(
+        "--dest", default=None,
+        help="local directory (default: state/logs/conversations/)",
+    )
+    fetch_p.add_argument(
+        "--ssh-key", default=None,
+        help="SSH private key path (default RENEE_POD_SSH_KEY or ~/.ssh/id_rsa)",
+    )
+
     beacon_p = sub.add_parser(
         "beacon-setup",
         help="fetch Beacon's public key + (optionally) register a webhook",
@@ -561,6 +579,127 @@ def cmd_migrate_secrets(args) -> int:
     return 0
 
 
+def cmd_version(args) -> int:
+    """Print build version + key dependencies. Reads the most-recent git
+    commit hash for "build" so a freshly-cloned tree without a tag still
+    has a useful identifier."""
+    import platform
+    import subprocess
+    print(f"renee   {_renee_version()}")
+    print(f"python  {platform.python_version()}")
+    try:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(REPO_ROOT), stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(REPO_ROOT), stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        print(f"git     {head} ({branch})")
+    except Exception:
+        print("git     (not a git repo)")
+    # Optional deps — surface for support purposes
+    for name in ("paramiko", "websockets", "runpod", "yaml", "fastapi"):
+        try:
+            mod = __import__(name)
+            ver = getattr(mod, "__version__", "?")
+            print(f"  {name:<12} {ver}")
+        except ImportError:
+            print(f"  {name:<12} (not installed)")
+    return 0
+
+
+def _renee_version() -> str:
+    """Read the version string. Prefers a VERSION file at the repo root;
+    falls back to the package's __version__ if present, else 'dev'."""
+    vf = REPO_ROOT / "VERSION"
+    if vf.exists():
+        return vf.read_text(encoding="utf-8").strip()
+    try:
+        import renee
+        return getattr(renee, "__version__", "dev")
+    except Exception:
+        return "dev"
+
+
+def cmd_fetch_logs(args) -> int:
+    """Pull conversation logs from the pod's /workspace/state/logs/
+    conversations/ to the OptiPlex's state/logs/conversations/.
+
+    Uses paramiko SFTP. Skipped silently if paramiko isn't installed —
+    the conversation log is also tailable via `renee logs` once it's
+    been written locally (after manual scp, etc.).
+    """
+    try:
+        import paramiko
+    except ImportError:
+        print("paramiko not installed; pip install paramiko then re-run")
+        return 2
+
+    from src.client.pod_manager import load_deployment, PodManager
+    settings = load_deployment(args.deploy_config)
+    if not settings.pod_id:
+        print("no pod_id in deployment.yaml")
+        return 2
+
+    rp = PodManager(settings)._client()
+    pod = rp.get_pod(settings.pod_id) or {}
+    runtime = pod.get("runtime") or {}
+    ssh_host = ""
+    ssh_port = None
+    for port in runtime.get("ports") or []:
+        if port.get("isIpPublic") and port.get("privatePort") == 22:
+            ssh_host = port["ip"]
+            ssh_port = port["publicPort"]
+            break
+    if not ssh_host or ssh_port is None:
+        print("pod has no public SSH port (expose 22 in TCP port map)")
+        return 2
+
+    key_path = Path(args.ssh_key or os.environ.get("RENEE_POD_SSH_KEY", str(Path.home() / ".ssh" / "id_rsa")))
+    if not key_path.exists():
+        print(f"SSH key not found: {key_path}")
+        return 2
+
+    dest = Path(args.dest) if args.dest else (REPO_ROOT / "state" / "logs" / "conversations")
+    dest.mkdir(parents=True, exist_ok=True)
+
+    print(f"connecting to root@{ssh_host}:{ssh_port} ...")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(ssh_host, port=int(ssh_port), username="root",
+                       key_filename=str(key_path), timeout=10)
+    except Exception as e:
+        print(f"ssh connect failed: {e}")
+        return 2
+
+    try:
+        sftp = client.open_sftp()
+        remote = "/workspace/state/logs/conversations"
+        try:
+            files = sftp.listdir(remote)
+        except IOError:
+            print(f"no logs at {remote} on pod")
+            return 0
+        copied = 0
+        for fname in files:
+            if not fname.endswith(".log"):
+                continue
+            local = dest / fname
+            sftp.get(f"{remote}/{fname}", str(local))
+            copied += 1
+            print(f"  pulled {fname}")
+        sftp.close()
+        print(f"\n{copied} log file(s) -> {dest}")
+    finally:
+        client.close()
+    return 0
+
+
 def cmd_backup(args) -> int:
     """Run a one-shot backup. Thin wrapper over scripts/run_backup.main()."""
     import importlib.util
@@ -721,6 +860,8 @@ HANDLERS = {
     "beacon-setup": cmd_beacon_setup,
     "backup": cmd_backup,
     "preflight": cmd_preflight,
+    "version": cmd_version,
+    "fetch-logs": cmd_fetch_logs,
 }
 
 
