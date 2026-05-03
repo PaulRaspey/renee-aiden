@@ -174,6 +174,46 @@ def build_app(
     async def ping() -> dict:
         return {"ok": True, "persona": cfg.persona, "ts": datetime.now().isoformat()}
 
+    @app.post("/api/beacon/webhook")
+    async def api_beacon_webhook(request: Request) -> JSONResponse:
+        """Endpoint Beacon's reaper POSTs to when an agent's heartbeat
+        goes silent. Verifies the HMAC signature in X-Beacon-Signature
+        against the configured Beacon public key (BEACON_PUBLIC_KEY env
+        or state/beacon_public_key.b64), persists the cert to a JSONL
+        journal, and returns 200 on success / 401 on signature mismatch /
+        400 on malformed payload.
+
+        We don't verify the Ed25519 signature on the cert body itself
+        here — the cert is preserved verbatim in the journal for any
+        downstream verifier that wants cryptographic proof.
+        """
+        from src.server.beacon_receiver import receive_webhook
+        raw = await request.body()
+        sig = request.headers.get("x-beacon-signature", "")
+        evt = request.headers.get("x-beacon-event", "")
+        result = receive_webhook(
+            raw_body=raw,
+            signature_header=sig,
+            event_header=evt,
+        )
+        if not result.ok:
+            # 401 when crypto fails; 400 for everything else (malformed JSON, etc.)
+            status = 401 if result.error and "signature" in result.error else 400
+            return JSONResponse({"ok": False, "error": result.error}, status_code=status)
+        return JSONResponse({"ok": True, "received_at": result.delivery.get("received_at")})
+
+    @app.get("/api/beacon/deaths")
+    async def api_beacon_deaths(limit: int = Query(50, ge=1, le=500)) -> dict:
+        """List recent agent.death events received from Beacon. Used by the
+        dashboard's Health tab to surface dead-agent events alongside
+        in-process health flags."""
+        from src.server.beacon_receiver import list_recent_deaths
+        try:
+            entries = list_recent_deaths(limit=limit)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "count": len(entries), "deaths": entries}
+
     @app.get("/api/cost/history")
     async def api_cost_history() -> dict:
         """Aggregate the ledger of pod up/down events into today / this-month

@@ -285,7 +285,13 @@ def _wait_for_ssh(host: str, port: int, *, timeout_s: int = 120, interval_s: flo
 def _default_volume_setup_runner() -> None:
     """Import and invoke scripts/volume_setup.main(). Imports lazily so
     the import (which pulls in paramiko, runpod, etc.) only happens when
-    actually needed."""
+    actually needed.
+
+    Passes an empty argv so volume_setup's argparse doesn't see the
+    launcher's flags. Stdout already streams line-by-line via
+    volume_setup._run(stream=True), so per-step progress shows up in the
+    launcher's terminal in real time.
+    """
     import importlib.util
     import sys
     setup_path = Path(__file__).resolve().parents[2] / "scripts" / "volume_setup.py"
@@ -295,7 +301,9 @@ def _default_volume_setup_runner() -> None:
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     sys.modules["renee_volume_setup"] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
-    rc = module.main()
+    print("\n--- volume_setup: starting (this can take 5-10 minutes) ---", flush=True)
+    rc = module.main([])
+    print(f"--- volume_setup: complete (rc={rc}) ---\n", flush=True)
     if rc != 0:
         raise SystemExit(rc)
 

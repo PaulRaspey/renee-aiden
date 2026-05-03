@@ -249,14 +249,16 @@ def step_verify(client, model_repos: list[dict]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Provision a fresh RunPod pod for Renée.")
     parser.add_argument("--deploy-config", default=str(REPO_ROOT / "configs" / "deployment.yaml"))
     parser.add_argument(
         "--ssh-key",
         default=os.environ.get("RENEE_POD_SSH_KEY", str(Path.home() / ".ssh" / "id_rsa")),
     )
-    args = parser.parse_args()
+    # Honor an explicit argv list so callers (e.g. pod_manager._default_volume_setup_runner)
+    # can invoke this in-process without inheriting the parent's command-line flags.
+    args = parser.parse_args(argv)
 
     cfg = yaml.safe_load(Path(args.deploy_config).read_text(encoding="utf-8")) or {}
     cloud = cfg.get("cloud") or {}

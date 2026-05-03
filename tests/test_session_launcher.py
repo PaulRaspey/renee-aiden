@@ -245,3 +245,58 @@ def test_parse_args_all_flags():
 def test_parse_args_rejects_invalid_gpu():
     with pytest.raises(SystemExit):
         session_launcher._parse_args(["--gpu", "ludicrous"])
+
+
+# -----------------------------------------------------------------------------
+# Daily cap pre-flight (#43)
+# -----------------------------------------------------------------------------
+
+
+def test_check_daily_cap_returns_none_without_safety_yaml(tmp_path, monkeypatch):
+    """When safety.yaml is missing, _check_daily_cap returns None."""
+    monkeypatch.setattr(session_launcher, "REPO_ROOT", tmp_path)
+    assert session_launcher._check_daily_cap() is None
+
+
+def test_check_daily_cap_full_when_no_db(tmp_path, monkeypatch):
+    """Cap configured but no DB yet => 0 used, full remaining."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "safety.yaml").write_text(
+        "health_monitor:\n  daily_cap_minutes: 120\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(session_launcher, "REPO_ROOT", tmp_path)
+    cap = session_launcher._check_daily_cap()
+    assert cap is not None
+    assert cap["cap_minutes"] == 120.0
+    assert cap["used_minutes"] == 0.0
+    assert cap["remaining_minutes"] == 120.0
+
+
+def test_check_daily_cap_reflects_used(tmp_path, monkeypatch):
+    """When the health monitor reports used minutes, remaining drops."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "safety.yaml").write_text(
+        "health_monitor:\n  daily_cap_minutes: 90\n", encoding="utf-8",
+    )
+    (tmp_path / "state").mkdir()
+    db = tmp_path / "state" / "renee_health.db"
+    db.write_text("")  # any existing file triggers the live-monitor branch
+    monkeypatch.setattr(session_launcher, "REPO_ROOT", tmp_path)
+
+    fake_monitor = MagicMock()
+    fake_monitor.daily_minutes.return_value = 35.0
+    with patch("src.safety.health_monitor.HealthMonitor", return_value=fake_monitor):
+        with patch("src.safety.health_monitor.HealthMonitorConfig"):
+            cap = session_launcher._check_daily_cap()
+    assert cap["used_minutes"] == 35.0
+    assert cap["cap_minutes"] == 90.0
+    assert cap["remaining_minutes"] == 55.0
+
+
+def test_check_daily_cap_returns_none_when_no_cap_configured(tmp_path, monkeypatch):
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "safety.yaml").write_text(
+        "health_monitor:\n  enabled: true\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(session_launcher, "REPO_ROOT", tmp_path)
+    assert session_launcher._check_daily_cap() is None

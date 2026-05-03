@@ -164,6 +164,44 @@ def _maybe_auto_provision(args: argparse.Namespace) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
+def _check_daily_cap() -> Optional[dict]:
+    """Read the safety/health-monitor SQLite for today's used minutes vs the
+    configured daily cap. Returns a dict with the relevant numbers, or None
+    when the health monitor or config aren't set up yet.
+
+    The launcher uses this to surface "X minutes left today" so Paul knows
+    before connecting whether the session will trip the cap mid-conversation.
+    """
+    try:
+        import yaml
+        cfg_raw = yaml.safe_load(
+            (REPO_ROOT / "configs" / "safety.yaml").read_text(encoding="utf-8"),
+        ) or {}
+    except Exception:
+        return None
+    hm = (cfg_raw.get("health_monitor") or {})
+    cap = hm.get("daily_cap_minutes")
+    if cap is None:
+        return None
+    db_path = REPO_ROOT / "state" / "renee_health.db"
+    if not db_path.exists():
+        # No monitor data yet; assume full cap available.
+        return {"used_minutes": 0.0, "cap_minutes": float(cap), "remaining_minutes": float(cap)}
+    try:
+        from src.safety.health_monitor import HealthMonitor, HealthMonitorConfig
+        # We only need daily_minutes() — defaults are fine for the read path.
+        monitor = HealthMonitor(db_path, cfg=HealthMonitorConfig(daily_cap_minutes=int(cap)))
+        used = float(monitor.daily_minutes())
+    except Exception:
+        return None
+    remaining = max(0.0, float(cap) - used)
+    return {
+        "used_minutes": round(used, 1),
+        "cap_minutes": float(cap),
+        "remaining_minutes": round(remaining, 1),
+    }
+
+
 def _check_beacon() -> Optional[str]:
     """Return None when BEACON_URL is unset OR the /v1/health probe succeeds.
     Return an error message string only when BEACON_URL is set but unreachable.
@@ -477,6 +515,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"      WARN: {beacon_warn}", flush=True)
         print("           continuing without liveness — Renée will skip heartbeats", flush=True)
 
+    # Daily cap budget — surfaced as a pre-flight info line so Paul sees how
+    # much session time is left before he connects. Doesn't gate the session.
+    cap = _check_daily_cap()
+    if cap is not None:
+        used, total_cap = cap["used_minutes"], cap["cap_minutes"]
+        remaining = cap["remaining_minutes"]
+        flag = "" if remaining > 30 else (" [low]" if remaining > 0 else " [CAP REACHED]")
+        print(
+            f"      daily cap: {used:.0f} of {total_cap:.0f} min used; "
+            f"{remaining:.0f} min remaining today{flag}",
+            flush=True,
+        )
+
     # ---------------------------------------------------------- 4. wake retry
     _step(4, total, "Pod wake (with STARTING retry) ...")
     waked, wake_info = _wake_with_retry(max_wait_s=90)
@@ -560,15 +611,45 @@ def main(argv: Optional[list[str]] = None) -> int:
             pass
 
         # Cost ledger: record pod-down for the monthly view.
+        elapsed_min = max(0.0, (time.time() - wake_at) / 60.0)
         try:
             from src.client.cost_ledger import record_down as _ledger_down
-            elapsed_min = max(0.0, (time.time() - wake_at) / 60.0)
             _ledger_down(
                 pod_id=pod_info.get("id", "") or "",
                 minutes=elapsed_min,
                 hourly_usd=GPU_HOURLY_USD.get(pod_gpu_type, GPU_HOURLY_USD["default"]),
                 gpu_type=pod_gpu_type,
             )
+        except Exception:
+            pass
+
+        # Memory Bridge auto-capture: publish a session-end handoff so the
+        # next Claude session has context. Skipped silently when the env
+        # vars aren't set.
+        try:
+            from src.client.memory_bridge_client import (
+                MemoryBridgeClient, build_session_handoff,
+            )
+            mb = MemoryBridgeClient.from_env()
+            if mb is not None:
+                rate = GPU_HOURLY_USD.get(pod_gpu_type, GPU_HOURLY_USD["default"])
+                cost_summary = {
+                    "uptime_minutes": round(elapsed_min, 1),
+                    "gpu_type": pod_gpu_type,
+                    "session_usd": round(elapsed_min / 60.0 * rate, 2),
+                }
+                payload = build_session_handoff(
+                    thread_name=os.environ.get("MEMORY_BRIDGE_THREAD", "renee-voice"),
+                    topic=args.topic,
+                    pod_id=pod_info.get("id"),
+                    cost_summary=cost_summary,
+                )
+                resp = mb.publish(payload)
+                if resp is not None:
+                    print(
+                        f"[stop] memory-bridge handoff captured "
+                        f"({resp.get('handoff_id', '?')})", flush=True,
+                    )
         except Exception:
             pass
 

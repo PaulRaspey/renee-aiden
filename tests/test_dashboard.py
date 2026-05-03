@@ -231,6 +231,72 @@ def test_cost_history_endpoint_handles_missing_ledger(client: TestClient, tmp_pa
     assert body["recent"] == []
 
 
+def test_beacon_webhook_rejects_unsigned_payload(client: TestClient):
+    """Without X-Beacon-Signature, the endpoint returns 401."""
+    r = client.post("/api/beacon/webhook", json={"event": "agent.death"})
+    assert r.status_code in (400, 401)
+    assert r.json()["ok"] is False
+
+
+def test_beacon_webhook_accepts_valid_signature(client: TestClient, tmp_path: Path, monkeypatch):
+    """End-to-end: sign a payload with a known key, set BEACON_PUBLIC_KEY,
+    POST, verify the journal line landed."""
+    import hashlib
+    import hmac
+    import json
+
+    journal = tmp_path / "deaths.jsonl"
+    monkeypatch.setattr(
+        "src.server.beacon_receiver.DEFAULT_DEATHS_JOURNAL", journal,
+    )
+    monkeypatch.setenv("BEACON_PUBLIC_KEY", "test-pub-key")
+
+    payload = {
+        "event": "agent.death",
+        "certificate": {"certificate_id": "cx", "agent_id": "ax"},
+        "server_public_key": "test-pub-key",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = "sha256=" + hmac.new(b"test-pub-key", body, hashlib.sha256).hexdigest()
+    r = client.post(
+        "/api/beacon/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Beacon-Signature": sig,
+            "X-Beacon-Event": "agent.death",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    # Journal got the cert
+    lines = journal.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["certificate"]["certificate_id"] == "cx"
+
+
+def test_beacon_deaths_endpoint_returns_persisted_entries(client: TestClient, tmp_path: Path, monkeypatch):
+    import json
+    journal = tmp_path / "deaths.jsonl"
+    journal.write_text(
+        json.dumps({
+            "event": "agent.death",
+            "certificate": {"certificate_id": "cx"},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "src.server.beacon_receiver.DEFAULT_DEATHS_JOURNAL", journal,
+    )
+    r = client.get("/api/beacon/deaths")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert body["deaths"][0]["certificate"]["certificate_id"] == "cx"
+
+
 def test_live_snapshot_structure(client: TestClient):
     r = client.get("/api/live/snapshot")
     assert r.status_code == 200

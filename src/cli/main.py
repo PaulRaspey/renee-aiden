@@ -124,6 +124,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="list sessions marked public but not yet published",
     )
 
+    dash_p = sub.add_parser(
+        "dashboard",
+        help="open the M15 dashboard in a browser (auto-starts if not running)",
+    )
+    dash_p.add_argument(
+        "--port", type=int, default=7860,
+        help="dashboard port (default 7860)",
+    )
+    dash_p.add_argument(
+        "--no-browser", action="store_true",
+        help="just start/verify the dashboard; don't open a browser",
+    )
+
+    logs_p = sub.add_parser(
+        "logs",
+        help="tail conversation logs from state/logs/conversations/",
+    )
+    logs_p.add_argument(
+        "--day", default=None,
+        help="YYYY-MM-DD; default is today (UTC)",
+    )
+    logs_p.add_argument(
+        "-f", "--follow", action="store_true",
+        help="follow the file as new turns are appended",
+    )
+    logs_p.add_argument(
+        "-n", "--tail", type=int, default=50,
+        help="show this many last lines before following (default 50)",
+    )
+
     unpublish_p = sub.add_parser(
         "unpublish", help="remove a previously published session from the target repo",
     )
@@ -370,6 +400,110 @@ def cmd_unpublish(args) -> int:
     return 0
 
 
+def cmd_dashboard(args) -> int:
+    """Open the M15 dashboard in a browser; auto-start it if not running.
+
+    Cheap way to get from "I want to look at mood/health right now" to a
+    browser tab without remembering URLs or terminal commands.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+    import webbrowser
+
+    url = f"http://127.0.0.1:{args.port}"
+
+    def _running() -> bool:
+        try:
+            with urllib.request.urlopen(f"{url}/api/ping", timeout=1.5) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    if _running():
+        print(f"dashboard already running at {url}")
+    else:
+        print(f"dashboard not running; starting it on {url} ...")
+        # Spawn detached so we don't block on the foreground; the user's
+        # browser will pick up the tab once it serves the first request.
+        import subprocess
+        subprocess.Popen(
+            [sys.executable, "-m", "src.dashboard"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Poll for readiness up to ~5s
+        for _ in range(50):
+            if _running():
+                break
+            time.sleep(0.1)
+        else:
+            print("dashboard didn't come up in 5s; still trying to open the browser")
+
+    if not args.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            print(f"could not auto-open browser: {e}")
+    return 0
+
+
+def cmd_logs(args) -> int:
+    """Tail the conversation log for a given day, optionally following.
+
+    The conversation logger writes one file per UTC day under
+    state/logs/conversations/YYYY-MM-DD.log (orchestrator priority 2).
+    This subcommand is the read-side companion: tail the last N lines
+    optionally with --follow so you can watch the file grow during a
+    live session.
+    """
+    import time
+    import datetime as _dt
+
+    day = args.day or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    log_path = REPO_ROOT / "state" / "logs" / "conversations" / f"{day}.log"
+
+    if not log_path.exists():
+        print(f"no log for {day} at {log_path}")
+        return 1
+
+    # Print the last N lines first (cheap; conversation logs stay small enough)
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    tail_n = max(0, int(args.tail))
+    for line in lines[-tail_n:]:
+        print(line)
+
+    if not args.follow:
+        return 0
+
+    # Follow mode: poll mtime + read appended bytes. Pure stdlib so this
+    # works without watchdog or platform-specific tail.
+    print(f"-- following {log_path} (Ctrl+C to stop) --")
+    pos = log_path.stat().st_size
+    try:
+        while True:
+            time.sleep(0.5)
+            try:
+                size = log_path.stat().st_size
+            except FileNotFoundError:
+                continue
+            if size < pos:
+                # File rotated/truncated — start over from the new top
+                pos = 0
+            if size > pos:
+                with log_path.open("r", encoding="utf-8", errors="replace") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                # chunk may end mid-line — print whole text but no extra newline
+                if chunk:
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
+    except KeyboardInterrupt:
+        print()
+        return 0
+
+
 HANDLERS = {
     "wake": cmd_wake,
     "talk": cmd_talk,
@@ -385,6 +519,8 @@ HANDLERS = {
     "publish": cmd_publish,
     "publish-list": cmd_publish_list,
     "unpublish": cmd_unpublish,
+    "dashboard": cmd_dashboard,
+    "logs": cmd_logs,
 }
 
 

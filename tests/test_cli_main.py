@@ -186,3 +186,103 @@ def test_talk_handler_bails_when_pod_not_running(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 2
     assert "not running" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# dashboard subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_subcommand_parses():
+    parser = cli_main.build_parser()
+    args = parser.parse_args(["dashboard", "--port", "7861", "--no-browser"])
+    assert args.command == "dashboard"
+    assert args.port == 7861
+    assert args.no_browser is True
+
+
+def test_dashboard_handler_skips_spawn_when_already_running(monkeypatch, capsys):
+    """When /api/ping returns 200, the handler must not spawn another dashboard."""
+    class _FakeCM:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: _FakeCM())
+    spawned = []
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda *a, **kw: spawned.append((a, kw)) or SimpleNamespace(),
+    )
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda u: opened.append(u))
+
+    args = SimpleNamespace(port=7860, no_browser=False)
+    rc = cli_main.cmd_dashboard(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert spawned == []
+    assert opened == ["http://127.0.0.1:7860"]
+    assert "already running" in out
+
+
+def test_dashboard_handler_spawns_when_down(monkeypatch, capsys):
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("conn refused")))
+    spawned = []
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda *a, **kw: spawned.append((a, kw)) or SimpleNamespace(),
+    )
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    monkeypatch.setattr("webbrowser.open", lambda u: None)
+
+    args = SimpleNamespace(port=7860, no_browser=True)
+    rc = cli_main.cmd_dashboard(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert len(spawned) == 1
+    assert "starting" in out
+
+
+# ---------------------------------------------------------------------------
+# logs subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_logs_subcommand_parses():
+    parser = cli_main.build_parser()
+    args = parser.parse_args(["logs", "--day", "2026-05-03", "-n", "10", "-f"])
+    assert args.command == "logs"
+    assert args.day == "2026-05-03"
+    assert args.tail == 10
+    assert args.follow is True
+
+
+def test_logs_handler_returns_1_when_log_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "REPO_ROOT", tmp_path)
+    args = SimpleNamespace(day="2099-01-01", tail=50, follow=False)
+    rc = cli_main.cmd_logs(args)
+    assert rc == 1
+    assert "no log" in capsys.readouterr().out.lower()
+
+
+def test_logs_handler_prints_tail(tmp_path, monkeypatch, capsys):
+    log_dir = tmp_path / "state" / "logs" / "conversations"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "2026-05-03.log"
+    log_file.write_text(
+        "\n".join(f"line-{i}" for i in range(20)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_main, "REPO_ROOT", tmp_path)
+    args = SimpleNamespace(day="2026-05-03", tail=5, follow=False)
+    rc = cli_main.cmd_logs(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Last 5 lines printed
+    assert "line-19" in out
+    assert "line-15" in out
+    assert "line-14" not in out  # excluded by tail=5
