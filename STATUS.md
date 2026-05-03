@@ -238,9 +238,21 @@ Incidental fixes: none.
 - [x] M14: cloud deployment skeleton (RunPod lifecycle, audio bridge shells)
 - [x] M14.mobile: PWA proxy with HTTPS, QR, Tailscale detect, per-client transcripts (this session)
 
+## Verified steps (this session: 2026-05-03)
+
+### Step 25: Beacon heartbeat client wired into cloud_startup
+Verified 2026-05-03 on matrix.
+Exercised: from_env returns None without BEACON_URL; persisted credentials are loaded across "restarts" and discarded when BEACON_URL changes; ensure_registered persists agent_id+api_key to state/beacon_credentials.json and is idempotent on re-call; heartbeat sends `Authorization: Bearer <api_key>`; HTTP 409 (post-mortem) clears credentials so the next start re-registers fresh; transport errors during heartbeat are swallowed (Beacon flakes don't crash the voice loop); run_heartbeat_loop terminates cleanly on stop(). 10 tests, all transport mocked.
+Incidental fixes:
+- `src/uahp/beacon_client.py`: new module. Stdlib `urllib.request` for HTTP — no new dep.
+- `scripts/cloud_startup.py`: post-self-test phase that calls `BeaconClient.from_env(STATE)`, registers, and starts the heartbeat loop. Failure is logged and recorded in `errors` but never crashes startup. `StartupResult.beacon_task` is held so `_serve_forever` can cancel it on shutdown.
+Notes:
+- `BEACON_URL`, `BEACON_AGENT_NAME` (default `renee_orchestrator`), `BEACON_HEARTBEAT_S` (default 30), `BEACON_GRACE_S` (default 15) are read from env. Leave `BEACON_URL` unset to keep liveness disabled — graceful degradation.
+
 ## What's next
 
 - [x] UAHP gap closure Part 2 (session capture pipeline + dashboard Sessions tab + QAL chain genesis on first record) - landed 2026-04-20 on feat/session-capture.
+- [x] Beacon heartbeat client + cloud_startup wiring - landed 2026-05-03 on feat/session-capture.
 - [ ] Wire the session recorder into `cloud_startup.py` so real recordings stream on pod-side orchestrator taps (see "Deferred (Part 2)" above).
 - [ ] Off-OptiPlex archive plan: sessions durable on OptiPlex, not replicated. Sketch backup target before session count exceeds 30.
 - [ ] Install review deps on the OptiPlex: `scripts/install_review_deps.bat` then accept the pyannote terms on HF and set HF_TOKEN.
