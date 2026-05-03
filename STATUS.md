@@ -249,6 +249,111 @@ Incidental fixes:
 Notes:
 - `BEACON_URL`, `BEACON_AGENT_NAME` (default `renee_orchestrator`), `BEACON_HEARTBEAT_S` (default 30), `BEACON_GRACE_S` (default 15) are read from env. Leave `BEACON_URL` unset to keep liveness disabled — graceful degradation.
 
+### Step 28: Launcher v3 — Python API, secrets, ledger, status page, chaos
+Verified 2026-05-03 on matrix.
+
+Eight more operator-facing features rounding out the launcher surface from the
+followup punch list (#3-#10). Builds on Step 26's #1-#10 batch and Step 27's
+UAHP closure.
+
+#3 dashboard SPA cost badge (server.py + inline JS): polls /api/cost every 30s,
+color-shifts to warn at $2 and bad at $5. Title shows hourly rate + status.
+
+#4 auto-volume-setup in PodManager.provision(): after create_pod returns the
+new SSH port, polls TCP 22 with `_wait_for_ssh` (configurable timeout, defaults
+to 120s), then runs scripts/volume_setup.main() via importlib so we don't shell
+out for what's already a Python module. Failures recorded in result["volume_setup"].
+Launcher gets --with-volume-setup flag.
+
+#5 renee.api Python surface (renee/api.py): typed dataclasses (PodInfo,
+WakeResult, TriageResult) and thin functions (pod_status, wake_pod, sleep_pod,
+provision_pod, triage_session, latest_session_dir, publish_session, publish_list,
+cost_summary). Re-exported from `renee` package — ``from renee import wake_pod``
+works without touching `src.*`. 11 tests.
+
+#6 renee.secrets keyring layer (renee/secrets.py): optional `keyring` import
+wrapped behind _keyring(); get/set/delete + migrate_env_to_keyring/
+populate_env_from_keyring. KNOWN_SECRETS lists every name renee recognizes.
+scripts/migrate_secrets.py is the one-time CLI; --check reports where each
+secret lives. populate_env_from_keyring runs at launcher startup so existing
+os.environ.get callsites work transparently after migration. 12 tests, all
+backends mocked.
+
+#7 Path B integration tests (tests/integration/test_path_b_transcode.py):
+exercises ffmpeg with the exact args from artifacts/api-server/src/lib/ws-handler.ts.
+Verifies 1-second tone yields exactly 96000 PCM bytes; 5-second streamed in
+10×100ms chunks preserves length; amplitude is well above noise floor; invalid
+input returns nonzero; WAV-wrapped PCM is decodable by ffmpeg (proxy for
+AudioContext.decodeAudioData accepting it on the PWA). Skipped when ffmpeg
+not on PATH. 5 tests.
+
+#8 Multi-session cost ledger (src/client/cost_ledger.py): SQLite table
+`pod_events` with up/down rows; record_up at wake, record_down at session
+stop. buckets() aggregates today + month from substring-matched ISO timestamps;
+respects monthly_budget_usd from deployment.yaml. /api/cost/history dashboard
+endpoint surfaces totals + last 20 events. Ledger auto-creates the DB +
+parent dir; concurrent SQLite writes from 4 threads × 10 ops each don't
+corrupt (chaos test). 8 tests.
+
+#9 Phone-side status page (#9): /status, /status.html, /status.js added to
+proxy_server's _STATIC_ROUTES; /api/status assembles {pod, cost, beacon}
+into one JSON; /api/sleep POSTs through to PodManager.sleep(). Phone shell
+is dark-mode HTML with native CSS — no framework. Polls every 10s; "Stop the
+pod" button fires confirm() then /api/sleep. 6 tests covering the helper
+functions and the static-route table.
+
+#10 Chaos tests (tests/integration/test_chaos.py): pod stuck in STARTING,
+network flap during heartbeat, Beacon 500 (must NOT clear creds, only 409
+does), transcript fan-out isolation when one listener raises, recorder
+start() crash, Tailscale CLI nonzero, concurrent ledger writes, keyring
+unavailable, ledger DB auto-create. 10 tests.
+
+Test sweep: 764 passed, 5 skipped, no regressions (was 695 going in).
+
+### Step 27: Pod-side audio_tap wiring + topic propagation
+Verified 2026-05-03 on matrix.
+
+Closes the Part 2 deferred items from Step 18.
+
+Per-connection SessionRecorder in CloudAudioBridge: when RENEE_RECORD=1 (or
+the bridge ctor's `recording_enabled` override is True), `_maybe_start_recorder`
+pulls identity + memory_store off `orchestrator.persona_core`, constructs a
+SessionRecorder via the injected factory (or the real class), starts it, and
+registers (a) an audio tap with mic_cb=on_mic_pcm + renee_cb=on_renee_pcm
+keyed `recorder:<id(ws)>`, and (b) a transcript listener keyed
+`recorder-tr:<id(ws)>` with cb=on_transcript_async. Both unregister on
+disconnect; recorder.stop() runs in `finally`. The recorder factory is
+test-injectable so tests don't write WAVs; failures during start are
+swallowed and the bridge keeps serving. 6 tests in audio_bridges_smoke.
+
+set_session_topic + topic-aware greeting: orchestrator stores
+`_session_topic` (trimmed, capped at 200 chars), greet_on_connect weaves
+it into the system prompt as "greet paul, who wants to talk about: {topic}.
+Open with one short sentence acknowledging the topic so he knows you've
+registered it." JSON dispatch in audio_bridge `_receive_audio` was
+previously dropping non-binary frames silently; now `_dispatch_text_message`
+parses control frames and routes set_topic (text or topic field alias)
+to set_session_topic. Errors swallowed — bridge never crashes on a bad
+client frame.
+
+PWA wiring: client.js reads `?topic=` from URLSearchParams on first
+WS open and emits `{type: "set_topic", text: ...}` before any audio.
+proxy_server reads RENEE_SESSION_TOPIC env and rewrites printed connect
+URLs + the QR-encoded primary URL to include `?topic=<urlencoded>`,
+so scanning the QR carries the topic onto the phone. Launcher --topic
+exports the env var so the proxy picks it up.
+
+5 orchestrator tests cover set_session_topic + topic-aware greeting;
+5 audio_bridge tests cover _dispatch_text_message including alias/
+unknown-type/invalid-JSON branches. proxy_server, client.js lifecycle
+tests still green.
+
+Architectural decisions:
+- Topic is per-connection, not per-pod. The PWA owns the topic; the
+  bridge is stateless about it across reconnects (the next ?topic= wins).
+- JSON control frames over the audio WS instead of a separate channel.
+  Simpler, and renee-aiden audio_bridge already had the WS open anyway.
+
 ### Step 26: Session launcher v2 — single-button UX additions
 Verified 2026-05-03 on matrix.
 Exercised: argparse coverage including `--topic`, `--gpu cheap|default|best`, `--auto-provision`, `--yes`, `--with-beacon`, `--with-memory-bridge`, `--no-triage-on-stop`. Tailscale auto-up via TAILSCALE_AUTHKEY env probes for IP, runs headless `tailscale up --authkey=...`, re-probes for IP, all mocked. Pod auto-provision creates a pod and rewrites `cloud.pod_id` in deployment.yaml in-place (preserves comments + inline notes), with TypeError fallback when SDK rejects `network_volume_id`. GPU_TIERS map covers cheap/default/best. Topic banner prints with the requested topic visible. Cost summary picks the right GPU rate from a substring match on the GPU display name and computes cost from elapsed time. Latest-session-dir finder skips `_publish_staging`-style underscored dirs and dirs without manifest.json. Triage trigger spawns `python -m renee triage <session-dir>` in background. /api/cost dashboard endpoint returns `ok:false` cleanly when status() raises and computes `session_usd = uptime/3600 * rate` with substring rate match. 38 tests across launcher + pod_manager + dashboard.
@@ -263,7 +368,9 @@ Incidental fixes:
 - [x] UAHP gap closure Part 2 (session capture pipeline + dashboard Sessions tab + QAL chain genesis on first record) - landed 2026-04-20 on feat/session-capture.
 - [x] Beacon heartbeat client + cloud_startup wiring - landed 2026-05-03 on feat/session-capture.
 - [x] Session launcher v2 with auto-provision + cost telemetry + cert overlay + publish button - landed 2026-05-03 on feat/session-capture.
-- [ ] Wire the session recorder into `cloud_startup.py` so real recordings stream on pod-side orchestrator taps (see "Deferred (Part 2)" above).
+- [x] Pod-side `register_audio_tap` per-connection wiring in `audio_bridge.py` (Step 27) - landed 2026-05-03 on feat/session-capture. Closes the Part 2 deferred item.
+- [x] Topic propagation end-to-end (launcher --topic → URL ?topic → PWA → bridge → orchestrator.set_session_topic → topic-aware greet) - landed 2026-05-03 on feat/session-capture.
+- [x] Launcher v3 (Python API, secrets layer, cost ledger, phone status page, chaos tests) - landed 2026-05-03 on feat/session-capture.
 - [ ] Off-OptiPlex archive plan: sessions durable on OptiPlex, not replicated. Sketch backup target before session count exceeds 30.
 - [ ] Install review deps on the OptiPlex: `scripts/install_review_deps.bat` then accept the pyannote terms on HF and set HF_TOKEN.
 - [ ] UAHP heartbeat emission from each agent (Part 3) so dead-agent registry + replay ledger see live traffic.

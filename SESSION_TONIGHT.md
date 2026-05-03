@@ -98,17 +98,27 @@ PowerShell twin: `scripts\start_session.ps1`.
 **All flags** (also via `python scripts\session_launcher.py --help`):
 
 ```
---topic STR                Print a topic banner before the session starts
+--topic STR                Plumb a topic into the URL/QR; PWA auto-sends
+                           set_topic on connect; orchestrator weaves it
+                           into the first greet
 --gpu cheap|default|best   GPU tier when auto-provisioning
+                           cheap=L40S ($0.79/hr), default=A100 ($1.50/hr),
+                           best=H100 ($3.50/hr)
 --auto-provision           Create a fresh pod if missing/dead
 -y, --yes                  Skip provision confirm prompt
+--with-volume-setup        After --auto-provision, SSH to the new pod and
+                           run scripts/volume_setup.py automatically
 --with-beacon              Spawn local Beacon co-process (needs pnpm install)
 --with-memory-bridge       Spawn local Memory Bridge for handoff capture
 --no-triage-on-stop        Skip auto-triage on Ctrl+C
 ```
 
-Set `TAILSCALE_AUTHKEY` in env to skip the interactive `tailscale up` —
-the launcher will auto-up headlessly when no IP is visible.
+Env vars the launcher honors:
+- `TAILSCALE_AUTHKEY` — skip interactive `tailscale up`; auto-ups headlessly
+- `RENEE_RECORD=1` — enable per-connection session capture in audio_bridge
+- `BEACON_URL` — point Beacon liveness at a deploy URL
+- `MEMORY_BRIDGE_URL` + `MEMORY_BRIDGE_TOKEN` — auto-capture handoff at session end
+- `BEACON_AGENT_NAME`, `BEACON_HEARTBEAT_S`, `BEACON_GRACE_S` — Beacon tuning
 
 ### Manual three-step (if the launcher fails partway)
 
@@ -140,6 +150,29 @@ scripts\publish_session.bat --list                   # list publishable sessions
 Wraps `python -m renee publish --confirm`. Stops you from accidentally
 shipping a private session — `manifest.public == true` and
 `presence_score != None` are still required.
+
+### Phone-side status page
+
+While the PWA is open, navigate to `https://<tailscale-ip>:8766/status`
+to see live pod state, today/month cost (from the SQLite ledger),
+Beacon heartbeats, and a "Stop the pod" button. Useful as a quick check
+without alt-tabbing to the dashboard, and lets you terminate the pod
+from the phone after a session.
+
+### Migrate plaintext .env secrets to OS keyring (one-time, optional)
+
+```powershell
+pip install keyring                            # install the optional dep
+python scripts\migrate_secrets.py --check      # see what's where
+python scripts\migrate_secrets.py --dry-run    # preview
+python scripts\migrate_secrets.py              # actual migration
+```
+
+Works against Windows Credential Manager / macOS Keychain / Linux
+Secret Service. After migration, the launcher's startup pulls them
+back into `os.environ` so existing code keeps working transparently.
+You can wipe the values from `.env` once `--check` shows them in
+keyring.
 
 The proxy prints:
 - `connect URL: https://<tailscale-ip>:8766/`
