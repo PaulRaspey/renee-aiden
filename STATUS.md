@@ -8,7 +8,7 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 **Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20; session capture pipeline (Part 2) landed 2026-04-20 on feat/session-capture. Phases 1-5 of the burn-in preamble all green. src/capture/ now owns session recording with QAL genesis, review dep detection, triage (WhisperX + Parselmouth + pyannote + latency + fatigue + safety extraction), the dashboard Sessions tab, review notes with #tag highlights, selective GitHub publishing with attestation manifests, and one-command startup. Session 1 will mint the live QAL genesis + global_chain_root.json on first record.
 **Branch:** feat/session-capture (seven commits on top of main after Part 1 merge; merge manually).
-**Repo:** https://github.com/PaulRaspey/renee-aiden (private)
+**Repo:** https://github.com/PaulRaspey/renee-aiden (public, with sister repos at /beacon, /memory-bridge, /renee-pwa)
 **Last commit:** see git log; feat/session-capture carries 7 commits - session recorder, review deps installer, triage pipeline, dashboard Sessions tab, review notes, GitHub publishing, one-command startup.
 **Next milestone:** M15 daily burn-in begins after Part 2 merge. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health + Sessions tabs watched for drift and triage-flag surprises.
 **Blockers:** Two deferred items in state/m15_readiness.md require the live pod (cold wake, real-bridge latency). Phone-side manual cert trust from prior sessions still outstanding.
