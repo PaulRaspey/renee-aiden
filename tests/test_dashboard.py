@@ -199,6 +199,38 @@ def test_cost_endpoint_returns_estimate(client: TestClient, monkeypatch):
     assert abs(body["session_usd"] - 1.50) < 0.01
 
 
+def test_cost_history_endpoint_aggregates_ledger(client: TestClient, tmp_path: Path, monkeypatch):
+    """Insert two down events at known timestamps, hit /api/cost/history,
+    verify it sums month-to-date correctly."""
+    from src.client import cost_ledger
+    db = tmp_path / "ledger.db"
+    monkeypatch.setattr(cost_ledger, "DEFAULT_LEDGER_PATH", db)
+    cost_ledger.record_down(
+        pod_id="p1", minutes=60, hourly_usd=1.50, gpu_type="A100", db_path=db,
+    )
+    r = client.get("/api/cost/history")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    # 1h × $1.50 = $1.50
+    assert body["this_month_usd"] == 1.50
+    assert body["samples"] == 1
+    assert body["recent"][0]["pod_id"] == "p1"
+
+
+def test_cost_history_endpoint_handles_missing_ledger(client: TestClient, tmp_path: Path, monkeypatch):
+    """Empty ledger returns zeros without crashing."""
+    from src.client import cost_ledger
+    db = tmp_path / "fresh.db"
+    monkeypatch.setattr(cost_ledger, "DEFAULT_LEDGER_PATH", db)
+    r = client.get("/api/cost/history")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["this_month_usd"] == 0
+    assert body["recent"] == []
+
+
 def test_live_snapshot_structure(client: TestClient):
     r = client.get("/api/live/snapshot")
     assert r.status_code == 200

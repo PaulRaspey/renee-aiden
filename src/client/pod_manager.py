@@ -156,6 +156,9 @@ class PodManager:
         ports_tcp: tuple[int, ...] = (8765, 22),
         update_yaml: bool = True,
         deploy_config_path: str | Path = DEFAULT_DEPLOY_CONFIG,
+        auto_volume_setup: bool = False,
+        ssh_wait_s: int = 120,
+        volume_setup_runner: Optional[Any] = None,
     ) -> dict:
         """Create a fresh pod with the audio bridge port + SSH exposed.
 
@@ -216,15 +219,85 @@ class PodManager:
         # Probe for IP availability — the pod usually needs a few seconds
         # before its public-port mapping is announced.
         public_ip = ""
+        ssh_port: Optional[int] = None
         for _ in range(40):
             time.sleep(2)
             info = rp.get_pod(new_id) or {}
             ip = _public_ip_from_pod(info)
             if ip:
                 public_ip = ip
+                # Capture the public port mapped to internal 22 for SSH.
+                runtime = info.get("runtime") or {}
+                for port in runtime.get("ports") or []:
+                    if port.get("isIpPublic") and port.get("privatePort") == 22:
+                        ssh_port = port.get("publicPort")
+                        break
                 break
 
-        return {"pod_id": str(new_id), "public_ip": public_ip}
+        result: dict = {
+            "pod_id": str(new_id),
+            "public_ip": public_ip,
+            "ssh_port": ssh_port,
+        }
+
+        # Optional auto-volume-setup: wait for SSH to be reachable, then
+        # run scripts/volume_setup.py on the new pod. Fails soft so the
+        # operator can fall back to running it by hand if something blows.
+        if auto_volume_setup and public_ip and ssh_port:
+            ssh_ok = _wait_for_ssh(public_ip, ssh_port, timeout_s=ssh_wait_s)
+            if not ssh_ok:
+                result["volume_setup"] = "ssh-unreachable"
+            else:
+                runner = volume_setup_runner or _default_volume_setup_runner
+                try:
+                    runner()
+                    result["volume_setup"] = "ok"
+                except SystemExit as e:
+                    result["volume_setup"] = f"exited {e.code}"
+                except Exception as e:
+                    result["volume_setup"] = f"failed: {e!r}"
+        elif auto_volume_setup:
+            result["volume_setup"] = "skipped (no IP/port)"
+
+        return result
+
+
+def _wait_for_ssh(host: str, port: int, *, timeout_s: int = 120, interval_s: float = 3.0) -> bool:
+    """Poll TCP connect to the SSH port until it accepts a connection.
+
+    sshd startup on a fresh RunPod container takes 30-90s after the pod
+    transitions to RUNNING. Returns True when a TCP connect succeeds,
+    False on timeout. Doesn't actually authenticate — paramiko handles
+    that in volume_setup.
+    """
+    import socket
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, int(port)), timeout=2.0):
+                return True
+        except (OSError, ConnectionRefusedError):
+            pass
+        time.sleep(interval_s)
+    return False
+
+
+def _default_volume_setup_runner() -> None:
+    """Import and invoke scripts/volume_setup.main(). Imports lazily so
+    the import (which pulls in paramiko, runpod, etc.) only happens when
+    actually needed."""
+    import importlib.util
+    import sys
+    setup_path = Path(__file__).resolve().parents[2] / "scripts" / "volume_setup.py"
+    if not setup_path.exists():
+        raise RuntimeError(f"volume_setup.py not found at {setup_path}")
+    spec = importlib.util.spec_from_file_location("renee_volume_setup", setup_path)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules["renee_volume_setup"] = module
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    rc = module.main()
+    if rc != 0:
+        raise SystemExit(rc)
 
 
 def _persist_pod_id(deploy_config_path: str | Path, new_id: str) -> None:

@@ -174,6 +174,50 @@ def build_app(
     async def ping() -> dict:
         return {"ok": True, "persona": cfg.persona, "ts": datetime.now().isoformat()}
 
+    @app.get("/api/cost/history")
+    async def api_cost_history() -> dict:
+        """Aggregate the ledger of pod up/down events into today / this-month
+        totals, plus the most recent N events for an in-dashboard list view.
+
+        Reads ``cloud.monthly_budget_usd`` from configs/deployment.yaml when
+        present so the response carries the budget for client-side coloring.
+        """
+        from src.client.cost_ledger import buckets, list_events
+        # Pull budget from deploy config; default to None when not set
+        budget: Optional[float] = None
+        try:
+            import yaml
+            cfg = yaml.safe_load(
+                Path("configs/deployment.yaml").read_text(encoding="utf-8")
+            ) or {}
+            raw = (cfg.get("cloud") or {}).get("monthly_budget_usd")
+            if raw is not None:
+                budget = float(raw)
+        except Exception:
+            pass
+        try:
+            buck = buckets(monthly_budget_usd=budget)
+            evts = list_events(limit=20)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        return {
+            "ok": True,
+            "today_usd": buck.today_usd,
+            "this_month_usd": buck.this_month_usd,
+            "this_month_minutes": buck.this_month_minutes,
+            "monthly_budget_usd": buck.monthly_budget_usd,
+            "over_budget": buck.over_budget,
+            "samples": buck.samples,
+            "recent": [
+                {
+                    "pod_id": e.pod_id, "event": e.event,
+                    "timestamp": e.timestamp_iso, "gpu": e.gpu_type,
+                    "minutes": e.minutes, "hourly_usd": e.hourly_usd,
+                    "cost_usd": e.cost_usd,
+                } for e in evts
+            ],
+        }
+
     @app.get("/api/cost")
     async def api_cost() -> dict:
         """Pod-up minutes × GPU hourly rate. Surface so Paul can decide
@@ -686,6 +730,13 @@ _SPA_HTML = """<!doctype html>
  .status-warn { color: #f3c34c; }
  .status-bad { color: #ff6161; }
  small { color: #8b93a2; }
+ #cost-badge { font: 12px ui-monospace, Menlo, Consolas, monospace;
+   color: #cdd3dc; background: #1a1e26; border: 1px solid #2a2f38;
+   border-radius: 6px; padding: 4px 8px; cursor: default;
+   white-space: nowrap; }
+ #cost-badge.warn { color: #f3c34c; border-color: #5b4b1f; }
+ #cost-badge.bad  { color: #ff6161; border-color: #5e1f1f; }
+ #cost-badge.dim  { color: #8b93a2; }
 </style>
 </head>
 <body>
@@ -699,7 +750,8 @@ _SPA_HTML = """<!doctype html>
   <button data-tab="eval">Eval</button>
   <button data-tab="sessions">Sessions</button>
  </nav>
- <span id="status" style="margin-left:auto;"><small>&nbsp;</small></span>
+ <span id="cost-badge" class="dim" style="margin-left:auto;" title="Pod-up minutes × GPU hourly rate; updates every 30s">cost: …</span>
+ <span id="status"><small>&nbsp;</small></span>
 </header>
 <main>
  <section id="tab-live" class="active">
@@ -1137,6 +1189,33 @@ async function loadSessionDetail(sessionId) {
 
 refreshTab("live");
 setInterval(() => { const active = document.querySelector("nav button.active").dataset.tab; refreshTab(active); }, 2000);
+
+// Cost badge — polls /api/cost every 30s. Color shifts to warn/bad as the
+// session approaches the monthly budget. Failure modes (no API key, pod
+// unreachable) collapse the badge to "cost: ?" rather than throwing in the
+// console, since the dashboard works fine without RunPod connectivity.
+async function refreshCost() {
+  const el = document.getElementById("cost-badge");
+  if (!el) return;
+  try {
+    const r = await fetch("/api/cost");
+    if (!r.ok) { el.textContent = "cost: ?"; el.className = "dim"; return; }
+    const j = await r.json();
+    if (!j.ok) { el.textContent = "cost: ?"; el.className = "dim"; el.title = j.error || ""; return; }
+    const min = j.uptime_minutes ?? 0;
+    const usd = j.session_usd ?? 0;
+    el.textContent = `${j.gpu_type ? j.gpu_type.replace(/^NVIDIA /, "") : "pod"}: ${min.toFixed(1)}m · $${usd.toFixed(2)}`;
+    el.title = `${j.status || "?"} · $${(j.hourly_usd || 0).toFixed(2)}/hr`;
+    if (usd >= 5) el.className = "bad";
+    else if (usd >= 2) el.className = "warn";
+    else el.className = "";
+  } catch (_) {
+    el.textContent = "cost: ?";
+    el.className = "dim";
+  }
+}
+refreshCost();
+setInterval(refreshCost, 30000);
 </script>
 </body>
 </html>

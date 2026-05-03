@@ -293,3 +293,115 @@ def test_persist_pod_id_noops_when_no_pod_id_line(tmp_path):
     _persist_pod_id(cfg, "pod-NEW")
     # No pod_id line means we don't crash — just don't write.
     assert "pod-NEW" not in cfg.read_text(encoding="utf-8")
+
+
+# -----------------------------------------------------------------------------
+# Auto-volume-setup (#4)
+# -----------------------------------------------------------------------------
+
+
+class FakeRunpodCreateWithSSH:
+    """Like FakeRunpodCreate but exposes both 8765 and 22 as public ports."""
+
+    def __init__(self):
+        self.api_key = None
+        self.create_calls: list[dict] = []
+
+    def create_pod(self, **kwargs):
+        self.create_calls.append(kwargs)
+        return {"id": "pod-w-ssh"}
+
+    def get_pod(self, pod_id):
+        return {
+            "id": pod_id,
+            "runtime": {
+                "ports": [
+                    {"ip": "9.8.7.6", "isIpPublic": True, "privatePort": 22,
+                     "publicPort": 22001, "type": "tcp"},
+                    {"ip": "9.8.7.6", "isIpPublic": True, "privatePort": 8765,
+                     "publicPort": 11111, "type": "tcp"},
+                ],
+            },
+        }
+
+
+def test_provision_returns_ssh_port_when_exposed(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\ncloud:\n  pod_id: old\n", encoding="utf-8")
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreateWithSSH()
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    result = mgr.provision(deploy_config_path=cfg)
+    assert result["public_ip"] == "9.8.7.6"
+    assert result["ssh_port"] == 22001
+
+
+def test_provision_with_auto_volume_setup_runs_runner(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\ncloud:\n  pod_id: old\n", encoding="utf-8")
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreateWithSSH()
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    monkeypatch.setattr("src.client.pod_manager._wait_for_ssh", lambda *a, **kw: True)
+    runs: list[bool] = []
+
+    def runner():
+        runs.append(True)
+    result = mgr.provision(
+        deploy_config_path=cfg,
+        auto_volume_setup=True,
+        volume_setup_runner=runner,
+    )
+    assert runs == [True]
+    assert result["volume_setup"] == "ok"
+
+
+def test_provision_with_auto_volume_setup_records_failure(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\ncloud:\n  pod_id: old\n", encoding="utf-8")
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreateWithSSH()
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    monkeypatch.setattr("src.client.pod_manager._wait_for_ssh", lambda *a, **kw: True)
+
+    def boom():
+        raise RuntimeError("paramiko refused")
+    result = mgr.provision(
+        deploy_config_path=cfg,
+        auto_volume_setup=True,
+        volume_setup_runner=boom,
+    )
+    assert "failed" in result["volume_setup"]
+
+
+def test_provision_with_auto_volume_setup_records_ssh_timeout(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\ncloud:\n  pod_id: old\n", encoding="utf-8")
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreateWithSSH()
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    monkeypatch.setattr("src.client.pod_manager._wait_for_ssh", lambda *a, **kw: False)
+    result = mgr.provision(
+        deploy_config_path=cfg,
+        auto_volume_setup=True,
+        volume_setup_runner=lambda: None,  # would run if SSH had been reachable
+    )
+    assert result["volume_setup"] == "ssh-unreachable"
+
+
+def test_wait_for_ssh_returns_false_on_timeout(monkeypatch):
+    """No socket reachable -> _wait_for_ssh should return False within ~timeout."""
+    from src.client.pod_manager import _wait_for_ssh
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    # Force socket.create_connection to always raise
+    import socket
+
+    def boom(*a, **kw):
+        raise OSError("nope")
+    monkeypatch.setattr(socket, "create_connection", boom)
+    # Use a very short timeout so the test is fast
+    assert _wait_for_ssh("1.2.3.4", 22, timeout_s=0, interval_s=0.0) is False
