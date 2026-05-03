@@ -476,6 +476,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--no-score-prompt", action="store_true",
         help="Skip the 1-5 presence-score prompt at the end of the session",
     )
+    parser.add_argument(
+        "--no-report", action="store_true",
+        help="Skip auto-generating report.md inside the latest session dir",
+    )
     return parser.parse_args(argv)
 
 
@@ -710,6 +714,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _prompt_presence_score(latest_session)
             except Exception as e:
                 print(f"[stop] presence score prompt failed: {e}", flush=True)
+
+        # Auto-generate the post-session report so tonight's documented
+        # sessions land with a Markdown summary next to the artifacts.
+        # Triage may still be running in background — the report will pick
+        # up triage results on its next regeneration if Paul re-runs
+        # `renee report <session>` once triage finishes.
+        if latest_session is not None and not args.no_report:
+            try:
+                from src.capture.report import write_report
+                report_path = write_report(latest_session)
+                print(f"[stop] report -> {report_path}", flush=True)
+            except Exception as e:
+                print(f"[stop] report write failed: {e}", flush=True)
 
         # Kill co-processes
         for p in coprocs:

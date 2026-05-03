@@ -232,6 +232,8 @@ def test_parse_args_all_flags():
         "--auto-provision", "--yes",
         "--with-beacon", "--with-memory-bridge",
         "--no-triage-on-stop",
+        "--no-score-prompt",
+        "--no-report",
     ])
     assert args.topic == "session 7"
     assert args.gpu == "best"
@@ -240,6 +242,8 @@ def test_parse_args_all_flags():
     assert args.with_beacon is True
     assert args.with_memory_bridge is True
     assert args.no_triage_on_stop is True
+    assert args.no_score_prompt is True
+    assert args.no_report is True
 
 
 def test_parse_args_rejects_invalid_gpu():
