@@ -64,6 +64,19 @@
           monthCls);
       }
 
+      // Daily cap (#53)
+      if (j.cap) {
+        const used = (j.cap.used_minutes ?? 0).toFixed(0);
+        const total = (j.cap.cap_minutes ?? 0).toFixed(0);
+        const remaining = j.cap.remaining_minutes ?? 0;
+        setVal("cap-state", `${used} / ${total} min`);
+        const cls = remaining <= 0 ? "err" : (remaining <= 30 ? "warn" : "ok");
+        setVal("cap-remaining", `${remaining.toFixed(0)} min`, cls);
+      } else {
+        setVal("cap-state", "off");
+        setVal("cap-remaining", "—");
+      }
+
       // Beacon
       if (j.beacon) {
         if (!j.beacon.configured) {

@@ -300,3 +300,79 @@ def test_check_daily_cap_returns_none_when_no_cap_configured(tmp_path, monkeypat
     )
     monkeypatch.setattr(session_launcher, "REPO_ROOT", tmp_path)
     assert session_launcher._check_daily_cap() is None
+
+
+# -----------------------------------------------------------------------------
+# Presence score prompt (#52)
+# -----------------------------------------------------------------------------
+
+
+def test_prompt_presence_score_blank_input_skips(tmp_path, monkeypatch, capsys):
+    sd = tmp_path / "session-x"
+    sd.mkdir()
+    (sd / "session_manifest.json").write_text("{}")
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    setp_calls = []
+    monkeypatch.setattr(
+        "src.capture.dashboard_sessions.set_presence_score",
+        lambda *a, **kw: setp_calls.append((a, kw)),
+    )
+    session_launcher._prompt_presence_score(sd)
+    assert setp_calls == []  # blank skipped, not coerced to 0
+
+
+def test_prompt_presence_score_out_of_range_skips(tmp_path, monkeypatch, capsys):
+    sd = tmp_path / "session-x"
+    sd.mkdir()
+    monkeypatch.setattr("builtins.input", lambda _p="": "9")
+    setp_calls = []
+    monkeypatch.setattr(
+        "src.capture.dashboard_sessions.set_presence_score",
+        lambda *a, **kw: setp_calls.append((a, kw)),
+    )
+    session_launcher._prompt_presence_score(sd)
+    assert setp_calls == []
+    assert "out of range" in capsys.readouterr().out.lower()
+
+
+def test_prompt_presence_score_persists_valid(tmp_path, monkeypatch, capsys):
+    sd = tmp_path / "session-x"
+    sd.mkdir()
+    monkeypatch.setattr("builtins.input", lambda _p="": "4")
+    captured = []
+    monkeypatch.setattr(
+        "src.capture.dashboard_sessions.set_presence_score",
+        lambda root, sid, score: captured.append((root, sid, score)) or {"presence_score": score},
+    )
+    monkeypatch.setattr(
+        "src.capture.session_recorder.default_sessions_root",
+        lambda: tmp_path,
+    )
+    session_launcher._prompt_presence_score(sd)
+    assert captured and captured[0][1] == "session-x" and captured[0][2] == 4
+    assert "presence_score=4" in capsys.readouterr().out
+
+
+def test_prompt_presence_score_non_numeric_skips(tmp_path, monkeypatch, capsys):
+    sd = tmp_path / "session-x"
+    sd.mkdir()
+    monkeypatch.setattr("builtins.input", lambda _p="": "five")
+    setp_calls = []
+    monkeypatch.setattr(
+        "src.capture.dashboard_sessions.set_presence_score",
+        lambda *a, **kw: setp_calls.append((a, kw)),
+    )
+    session_launcher._prompt_presence_score(sd)
+    assert setp_calls == []
+    assert "not a number" in capsys.readouterr().out.lower()
+
+
+def test_prompt_presence_score_handles_eof(tmp_path, monkeypatch):
+    """EOF (e.g., piped stdin closed) is treated like "no opinion" rather than crashing."""
+    sd = tmp_path / "session-x"
+    sd.mkdir()
+    def boom(_p=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", boom)
+    # Must not raise
+    session_launcher._prompt_presence_score(sd)

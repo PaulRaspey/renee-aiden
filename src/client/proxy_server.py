@@ -327,6 +327,36 @@ def _phone_status_snapshot() -> dict:
         pass
     payload["cost"] = cost
 
+    # Daily cap: same data the launcher's pre-flight reads, surfaced to the
+    # phone so Paul can see remaining minutes without alt-tabbing to the
+    # dashboard.
+    try:
+        import yaml
+        cfg_raw = yaml.safe_load(
+            Path("configs/safety.yaml").read_text(encoding="utf-8"),
+        ) or {}
+        cap_min = (cfg_raw.get("health_monitor") or {}).get("daily_cap_minutes")
+        if cap_min is not None:
+            from src.safety.health_monitor import HealthMonitor, HealthMonitorConfig
+            db_path = Path("state/renee_health.db")
+            used = 0.0
+            if db_path.exists():
+                try:
+                    monitor = HealthMonitor(
+                        db_path, cfg=HealthMonitorConfig(daily_cap_minutes=int(cap_min)),
+                    )
+                    used = float(monitor.daily_minutes())
+                except Exception:
+                    used = 0.0
+            payload["cap"] = {
+                "used_minutes": round(used, 1),
+                "cap_minutes": float(cap_min),
+                "remaining_minutes": round(max(0.0, float(cap_min) - used), 1),
+            }
+    except Exception:
+        # Cap surfacing is best-effort — don't fail the whole status snapshot.
+        pass
+
     # Beacon: only reach out if BEACON_URL is set. Dead/unreachable URL
     # collapses to {configured: True, reachable: False}.
     beacon: dict = {"configured": False}

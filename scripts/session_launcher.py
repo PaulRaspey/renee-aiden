@@ -354,6 +354,36 @@ def _trigger_triage(session_dir: Path) -> Optional[subprocess.Popen]:
     )
 
 
+def _prompt_presence_score(session_dir: Path) -> None:
+    """Ask Paul to rate 1-5 and write into the session manifest. Empty
+    input or non-numeric skips silently — no score is better than a
+    coerced wrong score, and review tooling already handles missing
+    presence_score gracefully."""
+    print("", flush=True)
+    print(f"How was that session? (1-5, blank to skip)", flush=True)
+    try:
+        raw = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not raw:
+        return
+    try:
+        score = int(raw)
+    except ValueError:
+        print(f"      not a number: {raw!r}; skipping", flush=True)
+        return
+    if not (1 <= score <= 5):
+        print(f"      out of range: {score}; skipping", flush=True)
+        return
+    try:
+        from src.capture.dashboard_sessions import set_presence_score
+        from src.capture.session_recorder import default_sessions_root
+        set_presence_score(default_sessions_root(), session_dir.name, score)
+        print(f"      recorded presence_score={score} on {session_dir.name}", flush=True)
+    except Exception as e:
+        print(f"      failed to persist score: {e}", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # Topic prompt (#4)
 # ---------------------------------------------------------------------------
@@ -441,6 +471,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-triage-on-stop", action="store_true",
         help="Skip auto-triage of the latest session dir on Ctrl+C",
+    )
+    parser.add_argument(
+        "--no-score-prompt", action="store_true",
+        help="Skip the 1-5 presence-score prompt at the end of the session",
     )
     return parser.parse_args(argv)
 
@@ -654,16 +688,28 @@ def main(argv: Optional[list[str]] = None) -> int:
             pass
 
         # Trigger triage on the most recent session dir (#2)
+        latest_session: Optional[Path] = None
         if not args.no_triage_on_stop:
             try:
                 from src.capture.session_recorder import default_sessions_root
-                latest = _latest_session_dir(default_sessions_root())
-                if latest is not None:
-                    _trigger_triage(latest)
+                latest_session = _latest_session_dir(default_sessions_root())
+                if latest_session is not None:
+                    _trigger_triage(latest_session)
                 else:
                     print("[stop] no session dir found; triage skipped", flush=True)
             except Exception as e:
                 print(f"[stop] triage trigger failed: {e}", flush=True)
+
+        # Eval score prompt — captures Paul's 1-5 score directly into the
+        # session manifest while the conversation's still fresh. Skipped on
+        # non-TTY stdin (CI / scripted runs) and when --no-score-prompt is set.
+        if (latest_session is not None
+                and not args.no_score_prompt
+                and sys.stdin.isatty()):
+            try:
+                _prompt_presence_score(latest_session)
+            except Exception as e:
+                print(f"[stop] presence score prompt failed: {e}", flush=True)
 
         # Kill co-processes
         for p in coprocs:

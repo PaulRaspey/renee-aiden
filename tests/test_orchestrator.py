@@ -1,6 +1,7 @@
 """Unit tests for src.orchestrator (M10). No network, no real LLM."""
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import random
 import wave
@@ -570,3 +571,40 @@ async def test_greet_on_connect_uses_default_when_no_topic(orchestrator: Orchest
     orchestrator.text_turn = capture  # type: ignore[assignment]
     await orchestrator.greet_on_connect()
     assert sent_prompts == ["system: greet paul, he just connected"]
+
+
+def test_conversation_log_writes_topic_header_on_first_write(orchestrator: Orchestrator, tmp_path: Path):
+    """When a topic is set and the day's log doesn't exist yet, the first
+    write prefixes the file with `# Topic: ...`. Subsequent writes don't
+    re-add it, but a topic *change* on the same day inserts a `# Topic
+    shifted: ...` marker."""
+    orchestrator.set_session_topic("Hilbert spaces")
+    orchestrator._append_conversation_log(user_text="hi", response_text="hello")
+    day = _dt.datetime.now().strftime("%Y-%m-%d")
+    log = orchestrator._conversation_log_dir / f"{day}.log"
+    assert log.exists()
+    text = log.read_text(encoding="utf-8")
+    assert "# Topic: Hilbert spaces" in text
+    assert "PAUL: hi" in text
+
+    # Second write: no extra topic header for the same topic
+    orchestrator._append_conversation_log(user_text="more", response_text="ok")
+    text2 = log.read_text(encoding="utf-8")
+    assert text2.count("# Topic: Hilbert spaces") == 1
+
+    # Change the topic mid-day → a shift marker appears
+    orchestrator.set_session_topic("pizza")
+    orchestrator._append_conversation_log(user_text="x", response_text="y")
+    text3 = log.read_text(encoding="utf-8")
+    assert "# Topic shifted: pizza" in text3
+
+
+def test_conversation_log_omits_topic_header_when_unset(orchestrator: Orchestrator):
+    """When no topic set, log is unchanged from prior shape."""
+    orchestrator._append_conversation_log(user_text="hi", response_text="ok")
+    day = _dt.datetime.now().strftime("%Y-%m-%d")
+    log = orchestrator._conversation_log_dir / f"{day}.log"
+    assert log.exists()
+    text = log.read_text(encoding="utf-8")
+    assert "# Topic" not in text
+    assert "PAUL: hi" in text

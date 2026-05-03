@@ -803,6 +803,11 @@ class Orchestrator:
         Format:
             [HH:MM:SS] PAUL: ...
             [HH:MM:SS] RENEE: ...
+
+        When a session topic is set the first time we touch a given day's
+        log, prefix the file with a `# Topic: ...` line so anyone reading
+        the log later (or `renee logs --day ...`) sees what frame Renée
+        opened on.
         """
         try:
             now = _dt.datetime.now()
@@ -811,6 +816,25 @@ class Orchestrator:
             stamp = now.strftime("%H:%M:%S")
             speaker = self.persona_name.upper() or "RENEE"
             lines = []
+            # Topic header: only emit on the first write of the day for this
+            # topic. We treat "first write" as "file doesn't exist yet" — a
+            # second topic during the same day produces a marker line so the
+            # context shift is visible.
+            #
+            # Use getattr because some test stubs (and the legacy single-slot
+            # transcript path) don't construct a full Orchestrator and won't
+            # have _session_topic set; falling back to None keeps logging
+            # working in those minimal contexts.
+            topic = getattr(self, "_session_topic", None)
+            if topic:
+                if not path.exists():
+                    lines.append(f"# Topic: {topic}")
+                    lines.append("")
+                else:
+                    last_topic_attr = "_last_logged_topic_for_day"
+                    if getattr(self, last_topic_attr, (None, None)) != (path.name, topic):
+                        lines.append(f"# Topic shifted: {topic}")
+                        setattr(self, last_topic_attr, (path.name, topic))
             if user_text:
                 lines.append(f"[{stamp}] PAUL: {user_text.strip()}")
             if response_text:
