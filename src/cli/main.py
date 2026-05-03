@@ -195,6 +195,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="SSH private key path (default RENEE_POD_SSH_KEY or ~/.ssh/id_rsa)",
     )
 
+    report_p = sub.add_parser(
+        "report",
+        help="generate a Markdown report.md inside a session directory",
+    )
+    report_p.add_argument("session_id", help="session id under the sessions root")
+    report_p.add_argument(
+        "--sessions-root", default=None,
+        help="override RENEE_SESSIONS_DIR / default sessions root",
+    )
+    report_p.add_argument(
+        "--print", action="store_true", dest="print_only",
+        help="print the report to stdout instead of writing report.md",
+    )
+
     beacon_p = sub.add_parser(
         "beacon-setup",
         help="fetch Beacon's public key + (optionally) register a webhook",
@@ -625,6 +639,23 @@ def _renee_version() -> str:
         return "dev"
 
 
+def cmd_report(args) -> int:
+    """Generate a Markdown report for a captured session."""
+    from src.capture.report import gather, render, write_report
+    from src.capture.session_recorder import default_sessions_root
+    root = Path(args.sessions_root) if args.sessions_root else default_sessions_root()
+    session_dir = root / args.session_id
+    if not session_dir.exists():
+        print(f"session not found: {session_dir}")
+        return 1
+    if args.print_only:
+        print(render(gather(session_dir)))
+    else:
+        out = write_report(session_dir)
+        print(f"wrote {out}")
+    return 0
+
+
 def cmd_fetch_logs(args) -> int:
     """Pull conversation logs from the pod's /workspace/state/logs/
     conversations/ to the OptiPlex's state/logs/conversations/.
@@ -862,6 +893,7 @@ HANDLERS = {
     "preflight": cmd_preflight,
     "version": cmd_version,
     "fetch-logs": cmd_fetch_logs,
+    "report": cmd_report,
 }
 
 
