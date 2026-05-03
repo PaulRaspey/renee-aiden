@@ -64,6 +64,9 @@ class StartupResult:
     elapsed_s: float
     bridge_url: Optional[str] = None
     errors: list[str] = None
+    # Heartbeat task is held on the result so callers (and the keep-alive
+    # loop in main()) can cancel it on shutdown. None if Beacon is disabled.
+    beacon_task: Optional[Any] = None
 
 
 # -------------------- phases --------------------
@@ -168,7 +171,9 @@ async def startup(
     logger.info("[4/7] registering agents ...")
     # Agents are lazily instantiated by PersonaCore / Orchestrator on first
     # construction — nothing to do at boot time beyond the identity manager
-    # that phase 2 already created.
+    # that phase 2 already created. The Beacon heartbeat client is started
+    # later (phase 6) so it picks up the audio bridge URL in its metadata.
+    beacon_task: Optional[Any] = None
 
     logger.info("[5/7] restoring persona state ...")
     await _restore_state(STATE)
@@ -242,11 +247,31 @@ async def startup(
     bridge_url = f"ws://0.0.0.0:{port}"
     logger.info("startup complete in %.1fs; bridge=%s", elapsed, bridge_url)
 
+    # Beacon liveness — register + start the heartbeat loop. Failures here
+    # never block startup; Renée works fine without a Beacon to report to.
+    try:
+        from src.uahp.beacon_client import BeaconClient
+        client = BeaconClient.from_env(STATE)
+        if client is not None:
+            await client.ensure_registered(
+                name=os.environ.get("BEACON_AGENT_NAME", "renee_orchestrator"),
+                description="Renée voice orchestrator on RunPod",
+                interval_seconds=int(os.environ.get("BEACON_HEARTBEAT_S", "30")),
+                grace_seconds=int(os.environ.get("BEACON_GRACE_S", "15")),
+                metadata={"bridge_url": bridge_url, "pod_id": os.environ.get("RUNPOD_POD_ID", "")},
+            )
+            beacon_task = asyncio.create_task(client.run_heartbeat_loop())
+            logger.info("beacon liveness enabled (agent_id=%s)", client.credentials.agent_id)
+    except Exception as e:
+        errors.append(f"beacon_setup: {e!r}")
+        logger.warning("beacon setup failed (non-fatal): %s", e)
+
     return StartupResult(
         ok=not errors,
         elapsed_s=round(elapsed, 2),
         bridge_url=bridge_url if not errors else None,
         errors=errors,
+        beacon_task=beacon_task,
     )
 
 
@@ -269,6 +294,13 @@ async def _serve_forever() -> int:
         await asyncio.sleep(float("inf"))
     except asyncio.CancelledError:
         pass
+    finally:
+        if result.beacon_task is not None and not result.beacon_task.done():
+            result.beacon_task.cancel()
+            try:
+                await result.beacon_task
+            except (asyncio.CancelledError, Exception):
+                pass
     return 0
 
 
