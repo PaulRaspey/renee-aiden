@@ -10,10 +10,20 @@ There are two phone paths. Pick one per session.
 | Path | UI | Backend | UAHP? | Session capture? |
 |------|----|---------|-------|------------------|
 | **A. Existing renee-aiden proxy** | Bare-bones PWA shell at `https://<tailscale>:8766/` | renee-aiden audio_bridge.py on RunPod | yes — full | partial (Part 2 wired but pod-side `register_audio_tap` still deferred) |
-| **B. New Replit PWA** | Polished React/Tailwind PWA on Replit deploy | Replit Express bridge → Groq Whisper + LLaMA + ElevenLabs (fallback path) | no — bypasses Renée orchestrator | no |
+| **B. New Replit PWA → renee-aiden audio_bridge** | Polished React/Tailwind PWA on Replit deploy | Replit Express bridge w/ ffmpeg webm→PCM transcode → renee-aiden audio_bridge.py on RunPod | yes — full | same gap as A |
+| **B-fallback. Replit PWA (no loop)** | Same PWA | Replit Express bridge → Groq Whisper + LLaMA + ElevenLabs | no — bypasses Renée orchestrator | no |
 
-**Tonight: use Path A** for the documented sessions. Path B is a UX preview
-without the full stack — webm/opus → PCM transcoding gap is unresolved.
+**Path B unblocked today**: the Express bridge now spawns ffmpeg per session
+to transcode webm/opus from MediaRecorder → 48kHz int16 PCM, and translates
+the orchestrator's JSON vocabulary (`transcript`/`response`/`session_end`)
+into what the PWA expects (`transcript_final`/`assistant_text`/`audio_done`).
+TTS PCM is buffered + WAV-wrapped on the way back. **Requires ffmpeg in the
+bridge's runtime PATH** — Replit's Nix env has it; OptiPlex needs
+`winget install Gyan.FFmpeg` once.
+
+To use Path B, set `RENEE_LOOP_URL=ws://<runpod-public-ip>:<runpod-public-port>/`
+in the bridge's Replit Secrets (or `.env` for local), pointing at the public
+TCP exposure of the pod's port 8765.
 
 ## Pre-flight (one-time)
 
@@ -52,17 +62,36 @@ Then update `configs/deployment.yaml` `cloud.pod_id` to the new ID.
 
 ## Per-session startup
 
+### One-button (recommended)
+
 ```powershell
-# 1. Bring the pod up + wait for the bridge to listen
-.venv\Scripts\python.exe -m renee wake
-
-# 2. (Optional) verify
-.venv\Scripts\python.exe -m renee status
-
-# 3. Start OptiPlex-side mobile proxy with HTTPS + cert + QR
-$env:RENEE_SKIP_ENCRYPT_WARN = "1"
-scripts\start_renee_mobile.bat --https
+scripts\start_session.bat
 ```
+
+Pre-flights Tailscale + RunPod + Beacon, wakes the pod (idempotent),
+starts the dashboard in background, runs the mobile proxy with HTTPS + QR
+in the foreground. Ctrl+C stops everything cleanly. Each pre-flight
+failure prints the remediation hint instead of dropping into a broken
+session. PowerShell twin: `scripts\start_session.ps1`.
+
+### Manual three-step (if the launcher fails partway)
+
+```powershell
+.venv\Scripts\python.exe -m renee wake          # bring pod up + wait
+.venv\Scripts\python.exe -m renee status        # verify
+scripts\start_renee_mobile.bat --https          # proxy + QR
+```
+
+### Desktop mode (auto-recording, no phone)
+
+```powershell
+scripts\start_renee_recording.bat
+```
+
+This runs `record_runner` which uses `python -m renee talk` (sounddevice
+on the OptiPlex), launches the dashboard, and triggers triage on Ctrl+C.
+Use this for at least one of tonight's documented sessions to get the
+full QAL-chained capture.
 
 The proxy prints:
 - `connect URL: https://<tailscale-ip>:8766/`
@@ -145,11 +174,15 @@ verify it's stopped at the end of the night.
 
 ## Known gaps (won't block tonight)
 
-1. **PWA → audio_bridge audio format mismatch**. Replit PWA's webm/opus
-   capture isn't transcoded by the Express bridge. Use Path A or
-   the PWA's Groq+ElevenLabs fallback only.
+1. ~~**PWA → audio_bridge audio format mismatch**~~. Resolved 2026-05-03:
+   Express bridge spawns ffmpeg per session for webm→PCM transcode,
+   buffers TTS PCM and WAV-wraps for the PWA, translates orchestrator
+   JSON vocabulary. Round-trip verified locally with a 5-second tone
+   streamed in 100ms chunks.
 2. **Pod-side `register_audio_tap` per-connection wiring** (Part 2
    deferred). Sessions through the phone path don't auto-record. See
    "Documenting" above.
 3. **Phone-side cert trust** is manual one-time per device.
 4. **Pod ID in deployment.yaml is two weeks old** — verify before wake.
+5. **ffmpeg required for Path B** — the bridge runtime needs ffmpeg on PATH.
+   Replit's Nix env has it; OptiPlex needs `winget install Gyan.FFmpeg`.
