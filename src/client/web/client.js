@@ -31,6 +31,16 @@
   const youLine = document.getElementById("line-you");
   const reneeLine = document.getElementById("line-renee");
   const ptt = document.getElementById("ptt");
+  const certOverlay = document.getElementById("cert-overlay");
+  const certRetryBtn = document.getElementById("cert-retry");
+
+  // Threshold for showing the cert-trust overlay (#6). On HTTPS pages a
+  // self-signed cert that wasn't installed at the device-trust level will
+  // fail the WSS handshake silently — the WS just keeps closing without
+  // ever opening. After this many close-without-open events we assume cert
+  // trouble and surface the install walkthrough. HTTP pages skip this
+  // entirely (no cert to install).
+  const CERT_OVERLAY_FAILURE_THRESHOLD = 2;
 
   const session = {
     ws: null,
@@ -47,7 +57,26 @@
     wakeLock: null,
     sampleRate: 0,
     isStarted: false,
+    // Cert-overlay state (#6): count consecutive WS closes that never reached open.
+    // Reset to 0 the first time onopen fires.
+    wsFailuresBeforeFirstOpen: 0,
+    wsHasEverOpened: false,
   };
+
+  // Cert overlay wiring (#6) — only meaningful on HTTPS pages
+  if (certRetryBtn) {
+    certRetryBtn.addEventListener("click", () => window.location.reload());
+  }
+  function maybeShowCertOverlay() {
+    if (!certOverlay) return;
+    if (window.location.protocol !== "https:") return; // HTTP has no cert to trust
+    if (session.wsHasEverOpened) return;
+    if (session.wsFailuresBeforeFirstOpen < CERT_OVERLAY_FAILURE_THRESHOLD) return;
+    certOverlay.hidden = false;
+  }
+  function hideCertOverlay() {
+    if (certOverlay && !certOverlay.hidden) certOverlay.hidden = true;
+  }
 
   function setStatus(text, cls) {
     statusText.textContent = text;
@@ -221,12 +250,19 @@
     session.ws.onopen = () => {
       setStatus("connected", "connected");
       session.reconnectDelay = 1000;
+      session.wsHasEverOpened = true;
+      session.wsFailuresBeforeFirstOpen = 0;
+      hideCertOverlay();
       setOrb("listening");
       if (session.pttEnabled) setMuted(true);
     };
     session.ws.onclose = () => {
       setStatus("reconnecting", "error");
       setOrb("idle");
+      if (!session.wsHasEverOpened) {
+        session.wsFailuresBeforeFirstOpen += 1;
+        maybeShowCertOverlay();
+      }
       scheduleReconnect();
     };
     session.ws.onerror = () => setStatus("connection error", "error");

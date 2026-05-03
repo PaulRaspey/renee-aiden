@@ -7,7 +7,9 @@ import pytest
 
 from src.client.pod_manager import (
     DeploymentSettings,
+    GPU_TIERS,
     PodManager,
+    _persist_pod_id,
     load_deployment,
 )
 
@@ -169,3 +171,125 @@ def test_status_ignores_private_ips_when_selecting_public(monkeypatch):
     monkeypatch.setattr(mgr, "_client", lambda: fake)
     info = mgr.status()
     assert info["public_ip"] == ""
+
+
+# -----------------------------------------------------------------------------
+# Provision (#1) + GPU tiers (#8) + pod_id YAML rewrite
+# -----------------------------------------------------------------------------
+
+
+def test_gpu_tiers_has_required_keys():
+    assert "cheap" in GPU_TIERS
+    assert "default" in GPU_TIERS
+    assert "best" in GPU_TIERS
+    # All values are non-empty RunPod gpu_type_id strings
+    for k, v in GPU_TIERS.items():
+        assert v and isinstance(v, str)
+
+
+class FakeRunpodCreate:
+    """Captures create_pod kwargs + returns a pre-canned new pod with public IP."""
+
+    def __init__(self, *, accept_volume: bool = True):
+        self.api_key = None
+        self.accept_volume = accept_volume
+        self.create_calls: list[dict] = []
+        self.created_pod_id = "pod-newly-minted"
+        self._got_ip_after_calls = 1
+        self._calls = 0
+
+    def create_pod(self, **kwargs):
+        if not self.accept_volume and "network_volume_id" in kwargs:
+            raise TypeError("network_volume_id not accepted in this SDK version")
+        self.create_calls.append(kwargs)
+        return {"id": self.created_pod_id}
+
+    def get_pod(self, pod_id):
+        # Simulate "IP not yet announced" then "IP arrives" on the 2nd poll.
+        self._calls += 1
+        if self._calls < self._got_ip_after_calls:
+            return {"id": pod_id, "runtime": {"ports": []}}
+        return {
+            "id": pod_id,
+            "runtime": {
+                "ports": [
+                    {"ip": "9.8.7.6", "isIpPublic": True, "privatePort": 8765,
+                     "publicPort": 11111, "type": "tcp"},
+                ],
+            },
+        }
+
+
+def test_provision_creates_pod_and_returns_ip(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text(
+        "mode: cloud\n"
+        "cloud:\n"
+        "  pod_id: pod-old\n"
+        "  region: US-TX\n"
+        "  audio_bridge_port: 8765\n"
+        "  audio_bridge_port_external: 10287\n",
+        encoding="utf-8",
+    )
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreate()
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    # Make the IP-poll loop fast so the test doesn't hang on time.sleep
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    result = mgr.provision(
+        gpu_type=GPU_TIERS["default"], volume_id="vol-abc",
+        deploy_config_path=cfg,
+    )
+    assert result["pod_id"] == "pod-newly-minted"
+    assert result["public_ip"] == "9.8.7.6"
+    assert mgr.settings.pod_id == "pod-newly-minted"
+    # Volume args were forwarded
+    call = fake.create_calls[0]
+    assert call["network_volume_id"] == "vol-abc"
+    assert call["volume_mount_path"] == "/workspace"
+    # YAML now points at the new pod
+    assert "pod-newly-minted" in cfg.read_text(encoding="utf-8")
+
+
+def test_provision_falls_back_to_minimal_kwargs_on_typeerror(monkeypatch, tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\ncloud:\n  pod_id: pod-old\n", encoding="utf-8")
+    mgr = PodManager(_settings(), api_key="x")
+    fake = FakeRunpodCreate(accept_volume=False)
+    monkeypatch.setattr(mgr, "_client", lambda: fake)
+    monkeypatch.setattr("src.client.pod_manager.time.sleep", lambda *_: None)
+    result = mgr.provision(
+        gpu_type=GPU_TIERS["cheap"], volume_id="vol-abc",
+        deploy_config_path=cfg,
+    )
+    assert result["pod_id"] == "pod-newly-minted"
+    # First create raised TypeError, second succeeded
+    assert len(fake.create_calls) == 1
+    assert "network_volume_id" not in fake.create_calls[0]
+
+
+def test_persist_pod_id_preserves_other_lines(tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text(
+        "# comment line\n"
+        "mode: cloud\n"
+        "cloud:\n"
+        "  pod_id: pod-old\n"
+        "  region: US-TX  # nice region\n"
+        "  audio_bridge_port: 8765\n",
+        encoding="utf-8",
+    )
+    _persist_pod_id(cfg, "pod-NEW")
+    text = cfg.read_text(encoding="utf-8")
+    assert "pod_id: pod-NEW\n" in text
+    assert "# comment line" in text  # comment preserved
+    assert "# nice region" in text   # inline comment preserved
+    assert "pod-old" not in text
+
+
+def test_persist_pod_id_noops_when_no_pod_id_line(tmp_path):
+    cfg = tmp_path / "deployment.yaml"
+    cfg.write_text("mode: cloud\nfoo: bar\n", encoding="utf-8")
+    _persist_pod_id(cfg, "pod-NEW")
+    # No pod_id line means we don't crash — just don't write.
+    assert "pod-NEW" not in cfg.read_text(encoding="utf-8")

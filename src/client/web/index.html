@@ -102,19 +102,24 @@
     #ptt.active { background: var(--accent-listening); color: #091015; border-color: transparent; }
     #ptt[hidden] { display: none; }
 
-    #overlay {
+    #overlay, #cert-overlay {
       position: fixed; inset: 0; background: rgba(11, 13, 16, 0.92);
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       z-index: 10; gap: 12px; padding: 24px; text-align: center;
     }
-    #overlay h1 { font-size: 28px; font-weight: 300; letter-spacing: 0.04em; }
-    #overlay p  { color: var(--dim); max-width: 320px; }
-    #overlay button {
+    #overlay h1, #cert-overlay h1 { font-size: 28px; font-weight: 300; letter-spacing: 0.04em; }
+    #overlay p, #cert-overlay p { color: var(--dim); max-width: 320px; }
+    #overlay button, #cert-overlay button {
       margin-top: 20px; padding: 16px 42px; border-radius: 999px;
       background: var(--accent); color: #120a1f; border: 0;
       font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
+      text-decoration: none; display: inline-block;
     }
-    #overlay[hidden] { display: none; }
+    #overlay[hidden], #cert-overlay[hidden] { display: none; }
+    #cert-overlay { z-index: 20; }
+    #cert-overlay ol { color: var(--dim); text-align: left; max-width: 320px;
+      font-size: 14px; line-height: 1.6; padding-left: 22px; }
+    #cert-overlay ol li { margin-bottom: 4px; }
 
     .err { color: var(--err); }
   </style>
@@ -139,6 +144,25 @@
     <p>Tap to grant microphone access and start talking. Works best with a stable Tailscale connection.</p>
     <button id="start">Tap to start</button>
     <p id="overlay-err" class="err" hidden></p>
+  </div>
+
+  <!-- Cert-trust overlay (hidden by default; shown when WS keeps failing after the first
+       page load). The HTTPS handshake to load this page may have succeeded with a
+       one-shot "Visit Website" prompt without persisting trust, in which case the WSS
+       handshake on the same self-signed cert will fail. The fix is to install the CA
+       from /cert and toggle Trust under Settings -> General -> About -> Certificate
+       Trust Settings. The overlay walks the user through it. -->
+  <div id="cert-overlay" role="dialog" aria-modal="true" hidden>
+    <h1>Trust the certificate</h1>
+    <p>Renee can't open the audio channel — the cert needs to be trusted on this device.</p>
+    <a href="/cert" id="cert-install">Install the cert</a>
+    <ol>
+      <li>Tap "Install the cert" — Safari saves it to your device</li>
+      <li>Open <b>Settings → General → VPN &amp; Device Management</b>, tap the new profile, install</li>
+      <li>Open <b>Settings → General → About → Certificate Trust Settings</b>, toggle the renee cert <b>ON</b></li>
+      <li>Return here and reload</li>
+    </ol>
+    <button id="cert-retry" type="button">Reload</button>
   </div>
 
   <script src="/client.js"></script>

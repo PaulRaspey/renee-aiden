@@ -45,7 +45,26 @@ old; verify it's still alive:
 .venv\Scripts\python.exe -m renee status
 ```
 
-If `status != RUNNING` or `public_ip` is empty, recreate:
+If `status != RUNNING` or `public_ip` is empty, you have two options:
+
+**Option A — auto-provision** (one command, billing event, asks for confirm):
+
+```powershell
+scripts\start_session.bat --auto-provision --gpu cheap
+```
+
+This creates a fresh pod with TCP ports 8765 + 22 exposed and rewrites
+`configs/deployment.yaml` with the new pod_id. `--gpu cheap` picks an
+L40S at $0.79/hr; `--gpu default` is A100 ($1.50/hr); `--gpu best` is
+H100 ($3.50/hr). Add `--yes` to skip the confirm prompt for unattended
+runs.
+
+Caveat: the SDK's `network_volume_id` parameter is not always honored
+across SDK versions. If you need the persistent volume attached, attach
+it via the RunPod UI after the pod is created, then re-run the
+launcher.
+
+**Option B — manual UI recreate** (full control over volume):
 
 - A100 SXM, US-KS-2 or US-TX
 - **Volume `physical_magenta_nightingale` attached at `/workspace`** (critical — without this every session loses memory)
@@ -68,11 +87,28 @@ Then update `configs/deployment.yaml` `cloud.pod_id` to the new ID.
 scripts\start_session.bat
 ```
 
-Pre-flights Tailscale + RunPod + Beacon, wakes the pod (idempotent),
-starts the dashboard in background, runs the mobile proxy with HTTPS + QR
-in the foreground. Ctrl+C stops everything cleanly. Each pre-flight
-failure prints the remediation hint instead of dropping into a broken
-session. PowerShell twin: `scripts\start_session.ps1`.
+Pre-flights Tailscale + RunPod + Beacon (soft), wakes the pod with retry
+on STARTING transition, starts the dashboard in background, runs the
+mobile proxy with HTTPS + QR in the foreground. Ctrl+C stops everything
+cleanly, prints the cost so far (pod-up minutes × GPU hourly rate), and
+auto-triages the most recent session dir. Each pre-flight failure prints
+the remediation hint instead of dropping into a broken session.
+PowerShell twin: `scripts\start_session.ps1`.
+
+**All flags** (also via `python scripts\session_launcher.py --help`):
+
+```
+--topic STR                Print a topic banner before the session starts
+--gpu cheap|default|best   GPU tier when auto-provisioning
+--auto-provision           Create a fresh pod if missing/dead
+-y, --yes                  Skip provision confirm prompt
+--with-beacon              Spawn local Beacon co-process (needs pnpm install)
+--with-memory-bridge       Spawn local Memory Bridge for handoff capture
+--no-triage-on-stop        Skip auto-triage on Ctrl+C
+```
+
+Set `TAILSCALE_AUTHKEY` in env to skip the interactive `tailscale up` —
+the launcher will auto-up headlessly when no IP is visible.
 
 ### Manual three-step (if the launcher fails partway)
 
@@ -92,6 +128,18 @@ This runs `record_runner` which uses `python -m renee talk` (sounddevice
 on the OptiPlex), launches the dashboard, and triggers triage on Ctrl+C.
 Use this for at least one of tonight's documented sessions to get the
 full QAL-chained capture.
+
+### Publish a captured session
+
+```powershell
+scripts\publish_session.bat <session-id>             # ships to public repo
+scripts\publish_session.bat <session-id> --no-confirm # stages only, no push
+scripts\publish_session.bat --list                   # list publishable sessions
+```
+
+Wraps `python -m renee publish --confirm`. Stops you from accidentally
+shipping a private session — `manifest.public == true` and
+`presence_score != None` are still required.
 
 The proxy prints:
 - `connect URL: https://<tailscale-ip>:8766/`

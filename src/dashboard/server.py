@@ -174,6 +174,48 @@ def build_app(
     async def ping() -> dict:
         return {"ok": True, "persona": cfg.persona, "ts": datetime.now().isoformat()}
 
+    @app.get("/api/cost")
+    async def api_cost() -> dict:
+        """Pod-up minutes × GPU hourly rate. Surface so Paul can decide
+        whether to terminate before the next morning's bill rolls in.
+
+        Returns ``status`` (the RunPod desiredStatus + uptime) and
+        ``estimate`` (elapsed minutes, hourly rate, USD-so-far). The
+        rate table is in src.client.pod_manager.GPU_HOURLY_USD when
+        added later; for now we mirror the launcher's rate map locally
+        to avoid a dashboard import on a non-cloud box."""
+        from src.client.pod_manager import (
+            PodManager, load_deployment,
+        )
+        # Mirror scripts/session_launcher.py's GPU_HOURLY_USD. Kept here
+        # so the dashboard works without the launcher module on path.
+        rates = {
+            "A100 SXM": 1.50, "A100 PCIe": 1.20, "A100 80GB PCIe": 1.20,
+            "H100 SXM": 3.50, "H100 PCIe": 2.95, "H100 80GB HBM3": 3.50,
+            "L40S": 0.79, "RTX 4090": 0.44, "RTX 3090": 0.29,
+        }
+        try:
+            settings = load_deployment("configs/deployment.yaml")
+            info = PodManager(settings).status()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        gpu = info.get("gpu_type", "") or ""
+        # Match by substring so "A100 SXM" matches "NVIDIA A100 SXM"
+        rate = next(
+            (v for k, v in rates.items() if k.lower() in gpu.lower()),
+            1.50,  # default
+        )
+        uptime_s = int(info.get("uptime_seconds") or 0)
+        cost = (uptime_s / 3600.0) * rate
+        return {
+            "ok": True,
+            "status": info.get("status", "UNKNOWN"),
+            "gpu_type": gpu,
+            "uptime_minutes": round(uptime_s / 60.0, 1),
+            "hourly_usd": rate,
+            "session_usd": round(cost, 2),
+        }
+
     # ------------------------------------------------------------------
     # live tab
     # ------------------------------------------------------------------

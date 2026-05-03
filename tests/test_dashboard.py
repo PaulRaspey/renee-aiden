@@ -163,6 +163,42 @@ def test_ping(client: TestClient):
     assert r.json()["persona"] == "renee"
 
 
+def test_cost_endpoint_handles_pod_unreachable(client: TestClient, monkeypatch):
+    """When PodManager.status() raises (no API key, network down), the
+    endpoint returns ok:false instead of 500-ing the dashboard."""
+    from src.client import pod_manager
+    def boom(self):
+        raise RuntimeError("no API key")
+    monkeypatch.setattr(pod_manager.PodManager, "status", boom)
+    r = client.get("/api/cost")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "error" in body
+
+
+def test_cost_endpoint_returns_estimate(client: TestClient, monkeypatch):
+    """When status() returns a running pod, the estimate is present and
+    rate selection picks a value from the known table."""
+    from src.client import pod_manager
+    def stub(self):
+        return {
+            "id": "pod-x", "status": "RUNNING", "public_ip": "1.2.3.4",
+            "uptime_seconds": 3600,  # 1h
+            "gpu_type": "NVIDIA A100 SXM",
+        }
+    monkeypatch.setattr(pod_manager.PodManager, "status", stub)
+    r = client.get("/api/cost")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["status"] == "RUNNING"
+    assert body["uptime_minutes"] == 60.0
+    # A100 SXM = $1.50/hr, 1h elapsed
+    assert body["hourly_usd"] == 1.50
+    assert abs(body["session_usd"] - 1.50) < 0.01
+
+
 def test_live_snapshot_structure(client: TestClient):
     r = client.get("/api/live/snapshot")
     assert r.status_code == 200

@@ -249,10 +249,20 @@ Incidental fixes:
 Notes:
 - `BEACON_URL`, `BEACON_AGENT_NAME` (default `renee_orchestrator`), `BEACON_HEARTBEAT_S` (default 30), `BEACON_GRACE_S` (default 15) are read from env. Leave `BEACON_URL` unset to keep liveness disabled — graceful degradation.
 
+### Step 26: Session launcher v2 — single-button UX additions
+Verified 2026-05-03 on matrix.
+Exercised: argparse coverage including `--topic`, `--gpu cheap|default|best`, `--auto-provision`, `--yes`, `--with-beacon`, `--with-memory-bridge`, `--no-triage-on-stop`. Tailscale auto-up via TAILSCALE_AUTHKEY env probes for IP, runs headless `tailscale up --authkey=...`, re-probes for IP, all mocked. Pod auto-provision creates a pod and rewrites `cloud.pod_id` in deployment.yaml in-place (preserves comments + inline notes), with TypeError fallback when SDK rejects `network_volume_id`. GPU_TIERS map covers cheap/default/best. Topic banner prints with the requested topic visible. Cost summary picks the right GPU rate from a substring match on the GPU display name and computes cost from elapsed time. Latest-session-dir finder skips `_publish_staging`-style underscored dirs and dirs without manifest.json. Triage trigger spawns `python -m renee triage <session-dir>` in background. /api/cost dashboard endpoint returns `ok:false` cleanly when status() raises and computes `session_usd = uptime/3600 * rate` with substring rate match. 38 tests across launcher + pod_manager + dashboard.
+Incidental fixes:
+- `src/client/pod_manager.py`: added `provision()` method using runpod SDK's `create_pod`. Falls back to bare-kwargs retry on TypeError (older SDK versions don't accept `network_volume_id` at create time). Added `_persist_pod_id` that surgically rewrites `cloud.pod_id:` in YAML preserving the rest of the file.
+- `src/client/web/index.html` + `src/client/web/client.js`: added `#cert-overlay` shown after `CERT_OVERLAY_FAILURE_THRESHOLD` consecutive WS closes that never reached open, when the page is HTTPS. Walks the user through the iOS Settings sequence (`Cert install → VPN & Device Management → Certificate Trust Settings`) that can't be scripted.
+- `src/dashboard/server.py`: new `/api/cost` endpoint surfaces pod-up minutes × GPU hourly rate so a stale tab kept open through the night reveals the running spend.
+- `scripts/publish_session.bat` + `.ps1`: thin wrappers around `python -m renee publish --confirm <session-id>` for one-button shipping after a good session.
+
 ## What's next
 
 - [x] UAHP gap closure Part 2 (session capture pipeline + dashboard Sessions tab + QAL chain genesis on first record) - landed 2026-04-20 on feat/session-capture.
 - [x] Beacon heartbeat client + cloud_startup wiring - landed 2026-05-03 on feat/session-capture.
+- [x] Session launcher v2 with auto-provision + cost telemetry + cert overlay + publish button - landed 2026-05-03 on feat/session-capture.
 - [ ] Wire the session recorder into `cloud_startup.py` so real recordings stream on pod-side orchestrator taps (see "Deferred (Part 2)" above).
 - [ ] Off-OptiPlex archive plan: sessions durable on OptiPlex, not replicated. Sketch backup target before session count exceeds 30.
 - [ ] Install review deps on the OptiPlex: `scripts/install_review_deps.bat` then accept the pyannote terms on HF and set HF_TOKEN.
