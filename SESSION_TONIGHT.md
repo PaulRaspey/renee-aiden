@@ -111,14 +111,31 @@ PowerShell twin: `scripts\start_session.ps1`.
 --with-beacon              Spawn local Beacon co-process (needs pnpm install)
 --with-memory-bridge       Spawn local Memory Bridge for handoff capture
 --no-triage-on-stop        Skip auto-triage on Ctrl+C
+--no-score-prompt          Skip the 1-5 presence-score prompt at end of session
 ```
 
 Env vars the launcher honors:
 - `TAILSCALE_AUTHKEY` — skip interactive `tailscale up`; auto-ups headlessly
 - `RENEE_RECORD=1` — enable per-connection session capture in audio_bridge
 - `BEACON_URL` — point Beacon liveness at a deploy URL
+- `BEACON_PUBLIC_KEY` — verify incoming webhooks (or use `state/beacon_public_key.b64`)
 - `MEMORY_BRIDGE_URL` + `MEMORY_BRIDGE_TOKEN` — auto-capture handoff at session end
+- `MEMORY_BRIDGE_THREAD` — handoff thread name (default `renee-voice`)
 - `BEACON_AGENT_NAME`, `BEACON_HEARTBEAT_S`, `BEACON_GRACE_S` — Beacon tuning
+- `RENEE_RECORD`, `RENEE_SESSIONS_DIR`, `RENEE_SKIP_ENCRYPT_WARN` — capture controls
+
+## Other CLI subcommands
+
+```powershell
+.venv\Scripts\python.exe -m renee dashboard            # open M15 dashboard
+.venv\Scripts\python.exe -m renee logs --day 2026-05-03 -f
+.venv\Scripts\python.exe -m renee migrate-secrets       # env -> keyring (one-time)
+.venv\Scripts\python.exe -m renee beacon-setup --url https://beacon.example
+.venv\Scripts\python.exe -m renee triage <session-dir>
+.venv\Scripts\python.exe -m renee highlights --sessions-root C:\Users\Epsar\renee-sessions
+.venv\Scripts\python.exe -m renee publish-list
+python scripts\run_backup.py                            # ad-hoc backup (or `renee backup`)
+```
 
 ### Manual three-step (if the launcher fails partway)
 

@@ -286,3 +286,103 @@ def test_logs_handler_prints_tail(tmp_path, monkeypatch, capsys):
     assert "line-19" in out
     assert "line-15" in out
     assert "line-14" not in out  # excluded by tail=5
+
+
+# ---------------------------------------------------------------------------
+# backup + preflight subcommands
+# ---------------------------------------------------------------------------
+
+
+def test_backup_subcommand_parses():
+    parser = cli_main.build_parser()
+    args = parser.parse_args(["backup", "--force"])
+    assert args.command == "backup"
+    assert args.force is True
+    assert args.check is False
+
+
+def test_preflight_subcommand_parses():
+    parser = cli_main.build_parser()
+    args = parser.parse_args(["preflight"])
+    assert args.command == "preflight"
+
+
+def test_preflight_handler_passes_when_all_green(monkeypatch, capsys):
+    """Inject all four checks as passing; preflight should return 0."""
+    # Patch the lazy-loaded launcher module after it's loaded inside cmd_preflight.
+    # We do that by monkeypatching the module via sys.modules pre-emptively if
+    # already loaded, or via the importlib.exec path otherwise. Simpler: patch
+    # importlib.util.module_from_spec to return a stub.
+    from types import SimpleNamespace as NS
+    fake_mod = NS(
+        _check_tailscale=lambda: (True, "100.x.x.x"),
+        _check_pod=lambda: (True, {"id": "pod1", "public_ip": "1.2.3.4"}),
+        _check_beacon=lambda: None,
+        _check_daily_cap=lambda: None,
+    )
+
+    def fake_module_from_spec(spec):
+        return fake_mod
+
+    def fake_exec_module(mod):
+        return None
+
+    class FakeSpec:
+        loader = SimpleNamespace(exec_module=fake_exec_module)
+
+    monkeypatch.setattr("importlib.util.spec_from_file_location",
+                        lambda *a, **kw: FakeSpec())
+    monkeypatch.setattr("importlib.util.module_from_spec", fake_module_from_spec)
+
+    rc = cli_main.cmd_preflight(SimpleNamespace())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "All checks passed" in out
+
+
+def test_preflight_handler_fails_when_pod_down(monkeypatch, capsys):
+    from types import SimpleNamespace as NS
+    fake_mod = NS(
+        _check_tailscale=lambda: (True, "100.x.x.x"),
+        _check_pod=lambda: (False, {"status": "STOPPED"}),
+        _check_beacon=lambda: None,
+        _check_daily_cap=lambda: None,
+    )
+
+    class FakeSpec:
+        loader = SimpleNamespace(exec_module=lambda m: None)
+
+    monkeypatch.setattr("importlib.util.spec_from_file_location",
+                        lambda *a, **kw: FakeSpec())
+    monkeypatch.setattr("importlib.util.module_from_spec", lambda spec: fake_mod)
+
+    rc = cli_main.cmd_preflight(SimpleNamespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "NOT READY" in out
+    assert "pod" in out
+
+
+def test_preflight_handler_fails_when_cap_reached(monkeypatch, capsys):
+    from types import SimpleNamespace as NS
+    fake_mod = NS(
+        _check_tailscale=lambda: (True, "100.x.x.x"),
+        _check_pod=lambda: (True, {"id": "p", "public_ip": "1.2.3.4"}),
+        _check_beacon=lambda: None,
+        _check_daily_cap=lambda: {
+            "used_minutes": 120.0, "cap_minutes": 120.0, "remaining_minutes": 0.0,
+        },
+    )
+
+    class FakeSpec:
+        loader = SimpleNamespace(exec_module=lambda m: None)
+
+    monkeypatch.setattr("importlib.util.spec_from_file_location",
+                        lambda *a, **kw: FakeSpec())
+    monkeypatch.setattr("importlib.util.module_from_spec", lambda spec: fake_mod)
+
+    rc = cli_main.cmd_preflight(SimpleNamespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "CAP REACHED" in out
+    assert "daily-cap-reached" in out

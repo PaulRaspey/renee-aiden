@@ -159,6 +159,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="copy known secrets from .env into the OS keyring (one-time)",
     )
 
+    backup_p = sub.add_parser(
+        "backup",
+        help="run a one-shot backup per deployment.yaml backup config",
+    )
+    backup_p.add_argument(
+        "--force", action="store_true",
+        help="ignore backup.enabled in deployment.yaml and back up anyway",
+    )
+    backup_p.add_argument(
+        "--check", action="store_true",
+        help="list existing archives + manifest tail; do nothing else",
+    )
+
+    sub.add_parser(
+        "preflight",
+        help="run all the launcher's pre-flight checks (tailscale, pod, beacon, cap) and exit",
+    )
+
     beacon_p = sub.add_parser(
         "beacon-setup",
         help="fetch Beacon's public key + (optionally) register a webhook",
@@ -543,6 +561,81 @@ def cmd_migrate_secrets(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    """Run a one-shot backup. Thin wrapper over scripts/run_backup.main()."""
+    import importlib.util
+    setup_path = REPO_ROOT / "scripts" / "run_backup.py"
+    spec = importlib.util.spec_from_file_location("renee_run_backup", setup_path)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    argv: list[str] = []
+    if args.check:
+        argv.append("--check")
+    if args.force:
+        argv.append("--force")
+    return mod.main(argv)
+
+
+def cmd_preflight(args) -> int:
+    """Run the launcher's pre-flight gates (tailscale, pod status, beacon,
+    daily cap) without actually starting a session. Useful as a quick
+    "is everything ready?" check before tonight's run.
+
+    Reads the same checks the launcher does so they stay in sync. Exits
+    0 when all gates pass, 1 when at least one fails.
+    """
+    import importlib.util
+    setup_path = REPO_ROOT / "scripts" / "session_launcher.py"
+    spec = importlib.util.spec_from_file_location("session_launcher", setup_path)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    failures: list[str] = []
+
+    print("[1/4] Tailscale ...")
+    ok, info = mod._check_tailscale()
+    if ok:
+        print(f"      ok ({info})")
+    else:
+        print(f"      FAIL: {info}")
+        failures.append("tailscale")
+
+    print("[2/4] RunPod status ...")
+    pod_ok, pod_info = mod._check_pod()
+    if pod_ok:
+        print(f"      ok (pod_id={pod_info.get('id')} ip={pod_info.get('public_ip')})")
+    else:
+        print(f"      FAIL: {pod_info}")
+        failures.append("pod")
+
+    print("[3/4] Beacon (optional) ...")
+    beacon_warn = mod._check_beacon()
+    if beacon_warn is None:
+        url = os.environ.get("BEACON_URL", "").strip()
+        print(f"      ok ({url})" if url else "      skipped (BEACON_URL not set)")
+    else:
+        print(f"      WARN: {beacon_warn}")
+        # Beacon is soft — not a failure.
+
+    print("[4/4] Daily cap ...")
+    cap = mod._check_daily_cap()
+    if cap is None:
+        print("      skipped (no health monitor / cap configured)")
+    else:
+        rem = cap["remaining_minutes"]
+        flag = "" if rem > 30 else (" [low]" if rem > 0 else " [CAP REACHED]")
+        print(f"      {cap['used_minutes']:.0f} of {cap['cap_minutes']:.0f} min used; "
+              f"{rem:.0f} min remaining{flag}")
+        if rem <= 0:
+            failures.append("daily-cap-reached")
+
+    if failures:
+        print(f"\nNOT READY: {', '.join(failures)}")
+        return 1
+    print("\nAll checks passed.")
+    return 0
+
+
 def cmd_beacon_setup(args) -> int:
     """Fetch Beacon's public key + optionally PATCH the agent's webhook_url.
 
@@ -626,6 +719,8 @@ HANDLERS = {
     "logs": cmd_logs,
     "migrate-secrets": cmd_migrate_secrets,
     "beacon-setup": cmd_beacon_setup,
+    "backup": cmd_backup,
+    "preflight": cmd_preflight,
 }
 
 

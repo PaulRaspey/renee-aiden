@@ -249,6 +249,93 @@ Incidental fixes:
 Notes:
 - `BEACON_URL`, `BEACON_AGENT_NAME` (default `renee_orchestrator`), `BEACON_HEARTBEAT_S` (default 30), `BEACON_GRACE_S` (default 15) are read from env. Leave `BEACON_URL` unset to keep liveness disabled — graceful degradation.
 
+### Step 31: Round 6 — eval prompt, daily cap on phone, topic in log, backup hook
+Verified 2026-05-03 on matrix.
+
+Eval prompt at session end (Ctrl+C path): when stdin is a TTY and a session
+was captured, launcher asks "How was that session? (1-5, blank to skip)" and
+persists via set_presence_score. EOF / out-of-range / non-numeric all skip
+silently. --no-score-prompt opts out for headless runs. 5 tests in
+test_session_launcher covering blank/out-of-range/valid/non-numeric/EOF.
+
+Daily cap on phone /status: same data the launcher's pre-flight reads,
+plumbed through proxy_server's _phone_status_snapshot. status.html grows
+a Daily-cap card showing used/total min and remaining with red/warn/ok
+coloring at 0 and 30 min thresholds.
+
+Topic header in conversation log: orchestrator._append_conversation_log
+writes `# Topic: <text>` on first write of the day when _session_topic
+is set; a topic change mid-day produces `# Topic shifted: <text>` so the
+context boundary is visible. Uses getattr() fallback so legacy stubs
+without _session_topic still work. 2 tests.
+
+Backup hook (src/client/backup.py + scripts/run_backup.py): reads
+backup.* from deployment.yaml; one tar.gz per run (or .tar with encrypt:
+false); includes chain root + per-session manifests/transcripts/notes/
+highlights but excludes WAVs (large + replicable). Retention pruning by
+mtime; manifest.jsonl per-archive metadata. enabled:false makes
+run_backup a no-op. --force overrides for one-off runs. 8 tests.
+
+### Step 30: Round 5 — dashboard/health surfacing + beacon-setup CLI + phone topic UI
+Verified 2026-05-03 on matrix.
+
+Dashboard Health tab: Beacon agent.death panel renders /api/beacon/deaths
+as a small table. Cost ledger panel renders /api/cost/history with today/
+month-to-date totals and recent-events table; budget state badge flips to
+bad when over_budget.
+
+renee migrate-secrets: thin subcommand wrapping scripts/migrate_secrets.py
+for discoverability via --help.
+
+renee beacon-setup --url <beacon> [--agent-id ... --webhook-url ...]:
+fetches /v1/server/public-key into state/beacon_public_key.b64 (the file
+the receiver reads). With both --agent-id and --webhook-url it also
+PATCHes /v1/agents/<id> to register the dashboard's webhook endpoint.
+Closes the trust loop end-to-end.
+
+PWA /status topic UI: new Topic card with current value + input. The
+button POSTs /api/topic which the proxy forwards as a brief WS frame
+to the audio bridge's set_topic dispatcher. proxy_server gains
+_phone_set_topic() helper with 3 tests.
+
+scripts/volume_setup.py main() now accepts an explicit argv so
+pod_manager._default_volume_setup_runner can call main([]) without
+inheriting the launcher's CLI flags (real bug — would have crashed
+argparse on --auto-provision).
+
+### Step 29: Round 4 — dashboard/logs CLI, cap pre-flight, memory bridge, beacon receiver
+Verified 2026-05-03 on matrix.
+
+renee dashboard: opens http://127.0.0.1:7860 in a browser, auto-spawns
+the dashboard process if /api/ping doesn't respond. --no-browser to
+verify-only. 3 tests.
+
+renee logs [--day YYYY-MM-DD] [-n N] [-f]: tails conversation logs
+from state/logs/conversations/. Pure-stdlib polling --follow that
+handles mid-write rotation. 4 tests.
+
+Daily cap pre-flight in launcher: reads safety.yaml health_monitor
+config + queries HealthMonitor.daily_minutes(); prints "X of Y min used;
+Z min remaining today" with [low]/[CAP REACHED] flags. Informational —
+doesn't gate. 4 tests.
+
+Volume setup arg fix: scripts/volume_setup.py main() honors an explicit
+argv list (was reading sys.argv unconditionally and would have crashed
+when called from pod_manager._default_volume_setup_runner with the
+launcher's flags). Also adds clear "starting/complete" banners around
+the long-running call.
+
+src/client/memory_bridge_client.py: HTTP client for /v1/handoffs.
+HandoffPayload + MemoryBridgeClient + build_session_handoff. Wired
+into the launcher's session-end shutdown path so a Ctrl+C auto-captures
+handoff context for the next Claude session. 9 tests.
+
+src/server/beacon_receiver.py: HMAC-SHA256 verification + JSONL journal
+for Beacon's agent.death webhooks. Refuses every webhook when
+BEACON_PUBLIC_KEY isn't configured (fail-closed). Dashboard endpoints
+/api/beacon/webhook (POST receiver) + /api/beacon/deaths (read-side).
+14 unit tests + 3 dashboard route tests.
+
 ### Step 28: Launcher v3 — Python API, secrets, ledger, status page, chaos
 Verified 2026-05-03 on matrix.
 
