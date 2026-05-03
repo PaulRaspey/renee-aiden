@@ -80,6 +80,20 @@
       <div class="row"><span class="key">Beacon</span><span class="val" id="beacon-state">…</span></div>
       <div class="row"><span class="key">Heartbeats</span><span class="val" id="beacon-hbs">…</span></div>
     </div>
+    <div class="card" id="topic-card">
+      <div class="row"><span class="key">Topic</span><span class="val" id="topic-current">—</span></div>
+      <div style="display:flex; gap:8px; padding-top:8px;">
+        <input id="topic-input" type="text" maxlength="200" placeholder="set session topic"
+          style="flex:1; padding:10px; background:#0f1218; color:var(--fg);
+                 border:1px solid #2a2f38; border-radius:8px;
+                 font:inherit; -webkit-appearance:none;" />
+        <button id="topic-set" type="button"
+          style="padding:10px 16px; border-radius:8px; background:var(--accent);
+                 color:#120a1f; border:0; font:inherit; font-weight:600;
+                 -webkit-tap-highlight-color:transparent;">set</button>
+      </div>
+      <small id="topic-hint">Sets via WS message; takes effect on Renée's next greeting.</small>
+    </div>
     <button id="stop" class="danger">Stop the pod</button>
     <p style="margin-top:14px; text-align:center;">
       <small><a href="/">back to talking</a></small>

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import socket
@@ -362,6 +363,32 @@ def _phone_sleep_now() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+async def _phone_set_topic(topic: str) -> dict:
+    """Forward a `set_topic` frame to the audio bridge over a brief WS.
+
+    Opens a one-shot WS, sends one JSON message, closes. Topic is empty
+    string -> orchestrator clears its session topic. Any error in the
+    transport returns ok:False so the phone can show a toast instead of
+    silently dropping the user's input.
+    """
+    try:
+        from src.client.proxy_server import resolve_bridge_url
+        from websockets.asyncio.client import connect as ws_connect
+    except Exception as e:
+        return {"ok": False, "error": f"setup: {e}"}
+    try:
+        url = resolve_bridge_url("configs/deployment.yaml")
+    except Exception as e:
+        return {"ok": False, "error": f"resolve: {e}"}
+    body = json.dumps({"type": "set_topic", "text": topic})
+    try:
+        async with ws_connect(url, open_timeout=4, close_timeout=2) as ws:
+            await ws.send(body)
+    except Exception as e:
+        return {"ok": False, "error": f"send: {e}"}
+    return {"ok": True, "topic": topic}
+
+
 # Explicit MIME map: we intentionally do not consult mimetypes.guess_type
 # for these routes because PWA correctness depends on the exact values.
 # Safari/Chrome treat application/json differently from
@@ -441,6 +468,29 @@ def make_process_request(
             payload = _phone_status_snapshot()
             body = json.dumps(payload).encode("utf-8")
             return _build(200, "OK", body, "application/json", {})
+
+        # Set-topic from the phone status page. Body: {"text": "..."}.
+        # The proxy opens a brief WS to the bridge and forwards a single
+        # set_topic frame so the orchestrator picks up the topic for the
+        # next greet_on_connect. The phone status page can call this any
+        # time without disturbing the audio session.
+        if path == "/api/topic":
+            method = getattr(request, "method", "POST")
+            if method != "POST":
+                return _build(405, "Method Not Allowed",
+                              b"use POST\n", "text/plain; charset=utf-8",
+                              {"Allow": "POST"})
+            try:
+                raw = bytes(request.body) if hasattr(request, "body") and request.body else b""
+                payload = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            except Exception:
+                payload = {}
+            topic = (payload.get("text") or payload.get("topic") or "").strip()
+            result = await _phone_set_topic(topic)
+            body = json.dumps(result).encode("utf-8")
+            status_code = 200 if result.get("ok") else 502
+            return _build(status_code, "OK" if result.get("ok") else "Bad Gateway",
+                          body, "application/json", {})
 
         # Phone-stop button (#9). POST only — we accept GET too as a defensive
         # fallback because some embedded WebViews block POST from a static

@@ -1055,3 +1055,68 @@ def test_phone_sleep_now_records_failure(monkeypatch):
     result = ps._phone_sleep_now()
     assert result["ok"] is False
     assert "auth failed" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# /api/topic helper (#50)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_phone_set_topic_forwards_via_ws(monkeypatch):
+    """Sends one JSON frame over a brief WS, then closes."""
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send(self, frame):
+            sent.append(frame)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    def fake_connect(url, **kwargs):
+        return FakeWS()
+
+    monkeypatch.setattr(
+        "src.client.proxy_server.resolve_bridge_url",
+        lambda _p: "ws://1.2.3.4:8765",
+    )
+    # Patch websockets.asyncio.client.connect in the function's namespace
+    import websockets.asyncio.client as _ws_mod
+    monkeypatch.setattr(_ws_mod, "connect", fake_connect)
+
+    result = await ps._phone_set_topic("memory consolidation")
+    assert result["ok"] is True
+    assert result["topic"] == "memory consolidation"
+    assert sent == ['{"type": "set_topic", "text": "memory consolidation"}']
+
+
+@pytest.mark.asyncio
+async def test_phone_set_topic_handles_resolve_failure(monkeypatch):
+    monkeypatch.setattr(
+        "src.client.proxy_server.resolve_bridge_url",
+        lambda _p: (_ for _ in ()).throw(RuntimeError("no pod")),
+    )
+    result = await ps._phone_set_topic("topic-x")
+    assert result["ok"] is False
+    assert "resolve" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_phone_set_topic_handles_ws_failure(monkeypatch):
+    monkeypatch.setattr(
+        "src.client.proxy_server.resolve_bridge_url",
+        lambda _p: "ws://1.2.3.4:8765",
+    )
+    import websockets.asyncio.client as _ws_mod
+
+    def boom(*a, **kw):
+        raise OSError("connect refused")
+
+    monkeypatch.setattr(_ws_mod, "connect", boom)
+    result = await ps._phone_set_topic("x")
+    assert result["ok"] is False
+    assert "send" in result["error"]

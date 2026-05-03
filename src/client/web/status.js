@@ -85,6 +85,40 @@
     }
   }
 
+  // Topic display — show whatever is in localStorage so the user sees the
+  // last topic they set; updated when /api/topic returns one
+  function showTopic() {
+    const stored = localStorage.getItem("renee_topic") || "";
+    $("topic-current").textContent = stored || "—";
+    $("topic-input").value = stored;
+  }
+  showTopic();
+
+  $("topic-set").addEventListener("click", async () => {
+    const topic = ($("topic-input").value || "").trim();
+    const btn = $("topic-set");
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/topic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: topic }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok && body.ok) {
+        localStorage.setItem("renee_topic", topic);
+        showTopic();
+        toast(topic ? "topic set" : "topic cleared");
+      } else {
+        toast(body.error || "topic set failed");
+      }
+    } catch (e) {
+      toast("network error: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $("stop").addEventListener("click", async () => {
     if (!confirm("Stop the pod? This ends the current session and stops billing.")) return;
     const btn = $("stop");

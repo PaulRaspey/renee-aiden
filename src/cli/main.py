@@ -154,6 +154,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="show this many last lines before following (default 50)",
     )
 
+    sub.add_parser(
+        "migrate-secrets",
+        help="copy known secrets from .env into the OS keyring (one-time)",
+    )
+
+    beacon_p = sub.add_parser(
+        "beacon-setup",
+        help="fetch Beacon's public key + (optionally) register a webhook",
+    )
+    beacon_p.add_argument(
+        "--url", required=True,
+        help="Base URL of the Beacon deploy (e.g. https://beacon.example)",
+    )
+    beacon_p.add_argument(
+        "--agent-id", default=None,
+        help="Agent ID to PATCH webhook_url onto; if omitted, only fetches the key",
+    )
+    beacon_p.add_argument(
+        "--api-key", default=None,
+        help="Agent's api_key for the PATCH (defaults to BEACON_API_KEY env)",
+    )
+    beacon_p.add_argument(
+        "--webhook-url", default=None,
+        help="Public URL where this dashboard's /api/beacon/webhook is reachable",
+    )
+
     unpublish_p = sub.add_parser(
         "unpublish", help="remove a previously published session from the target repo",
     )
@@ -504,6 +530,83 @@ def cmd_logs(args) -> int:
         return 0
 
 
+def cmd_migrate_secrets(args) -> int:
+    """Copy KNOWN_SECRETS values from env into the OS keyring."""
+    from renee import secrets
+    summary = secrets.migrate_env_to_keyring()
+    if not summary:
+        print("nothing to migrate")
+        return 0
+    width = max(len(k) for k in summary)
+    for name, status in summary.items():
+        print(f"  {name:<{width}}  {status}")
+    return 0
+
+
+def cmd_beacon_setup(args) -> int:
+    """Fetch Beacon's public key + optionally PATCH the agent's webhook_url.
+
+    Two outputs depending on flags:
+      1. Always writes state/beacon_public_key.b64 with the fetched key so
+         the receiver can verify webhooks signed by this beacon.
+      2. If --agent-id + --webhook-url given, also PATCHes
+         /v1/agents/{agent_id} so Beacon knows where to deliver death
+         certs. Requires --api-key (or BEACON_API_KEY env).
+    """
+    import json as _json
+    import urllib.request as _ur
+    import urllib.error as _ue
+
+    base = args.url.rstrip("/")
+    state_dir = REPO_ROOT / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Fetch + persist the public key
+    print(f"fetching public key from {base}/v1/server/public-key ...")
+    try:
+        with _ur.urlopen(f"{base}/v1/server/public-key", timeout=5) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+    except _ue.URLError as e:
+        print(f"error: {e}")
+        return 2
+    pub = data.get("public_key") or data.get("server_public_key")
+    if not pub:
+        print(f"error: no public_key in response: {data}")
+        return 2
+    out = state_dir / "beacon_public_key.b64"
+    out.write_text(str(pub).strip() + "\n", encoding="utf-8")
+    print(f"  wrote {out}")
+    print(f"  set BEACON_PUBLIC_KEY in .env if you'd rather override this file:")
+    print(f"      BEACON_PUBLIC_KEY={pub}")
+
+    # 2. Optionally register the webhook on the agent
+    if args.agent_id and args.webhook_url:
+        api_key = args.api_key or os.environ.get("BEACON_API_KEY", "")
+        if not api_key:
+            print("error: --api-key (or BEACON_API_KEY) required to PATCH webhook_url")
+            return 2
+        body = _json.dumps({"webhook_url": args.webhook_url}).encode("utf-8")
+        req = _ur.Request(
+            f"{base}/v1/agents/{args.agent_id}",
+            data=body, method="PATCH",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        try:
+            with _ur.urlopen(req, timeout=5) as resp:
+                response = _json.loads(resp.read().decode("utf-8"))
+        except _ue.URLError as e:
+            print(f"error patching webhook: {e}")
+            return 2
+        print(f"  registered webhook_url={response.get('webhook_url')}")
+    elif args.agent_id or args.webhook_url:
+        print("note: provide both --agent-id and --webhook-url to register webhook")
+
+    return 0
+
+
 HANDLERS = {
     "wake": cmd_wake,
     "talk": cmd_talk,
@@ -521,6 +624,8 @@ HANDLERS = {
     "unpublish": cmd_unpublish,
     "dashboard": cmd_dashboard,
     "logs": cmd_logs,
+    "migrate-secrets": cmd_migrate_secrets,
+    "beacon-setup": cmd_beacon_setup,
 }
 
 

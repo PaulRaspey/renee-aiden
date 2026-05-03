@@ -887,6 +887,21 @@ _SPA_HTML = """<!doctype html>
    <div id="health-30d"></div>
   </div>
   <div class="card">
+   <h3>Beacon — agent deaths
+    <small id="beacon-count" style="margin-left:8px"></small>
+   </h3>
+   <div id="beacon-deaths"></div>
+   <small>Set <code>BEACON_PUBLIC_KEY</code> + point Beacon's webhook at
+    <code>/api/beacon/webhook</code> to populate this list.</small>
+  </div>
+  <div class="card">
+   <h3>Cost — pod-up ledger
+    <small id="cost-budget-state" style="margin-left:8px"></small>
+   </h3>
+   <div id="cost-totals"></div>
+   <div id="cost-recent" style="margin-top:10px"></div>
+  </div>
+  <div class="card">
    <h3>Manual pause</h3>
    <label>hours <input type="number" id="pause-hours" value="24" min="1" max="72"></label>
    <input id="pause-reason" placeholder="reason (optional)" style="width:40%">
@@ -1075,6 +1090,66 @@ async function loadHealth() {
     const confirmed = $("#pause-confirm").value;
     await api("/api/health/pause", {method:"POST", body: JSON.stringify({hours, reason, confirm: confirmed})});
   };
+  // Beacon deaths panel — degrades to "none yet" when no journal exists
+  try {
+    const d = await fetch("/api/beacon/deaths").then(r => r.json());
+    if (d.ok) {
+      $("#beacon-count").textContent = d.count > 0 ? `(${d.count} recent)` : "(none)";
+      if (d.deaths.length === 0) {
+        $("#beacon-deaths").innerHTML = "<small>No agent.death events received yet.</small>";
+      } else {
+        const rows = d.deaths.slice(0, 12).map(e => {
+          const c = e.certificate || {};
+          const at = (e.received_at || "").replace("T", " ").slice(0, 19);
+          return `<tr><td><small>${at}</small></td>` +
+                 `<td>${c.agent_name || c.agent_id || "?"}</td>` +
+                 `<td><small>${c.certificate_id || ""}</small></td>` +
+                 `<td><small>${c.lifetime_seconds ? c.lifetime_seconds + "s" : ""}</small></td></tr>`;
+        }).join("");
+        $("#beacon-deaths").innerHTML =
+          `<table><tr><th>received</th><th>agent</th><th>cert</th><th>lifetime</th></tr>${rows}</table>`;
+      }
+    } else {
+      $("#beacon-deaths").innerHTML = `<small class="status-warn">${d.error || "?"}</small>`;
+    }
+  } catch (e) {
+    $("#beacon-deaths").innerHTML = `<small class="status-warn">load failed</small>`;
+  }
+  // Cost ledger panel
+  try {
+    const c = await fetch("/api/cost/history").then(r => r.json());
+    if (c.ok) {
+      const overBudget = c.over_budget;
+      const budgetState = c.monthly_budget_usd != null
+        ? (overBudget ? `<span class="status-bad">OVER BUDGET ($${c.monthly_budget_usd})</span>`
+                      : `<span class="status-good">within $${c.monthly_budget_usd} budget</span>`)
+        : "(no budget set)";
+      $("#cost-budget-state").innerHTML = budgetState;
+      $("#cost-totals").innerHTML =
+        `today: $${c.today_usd.toFixed(2)} · ` +
+        `month-to-date: $${c.this_month_usd.toFixed(2)} (${c.this_month_minutes.toFixed(0)} min) · ` +
+        `${c.samples} session${c.samples === 1 ? "" : "s"}`;
+      const evRows = (c.recent || []).slice(0, 10).map(r => {
+        const at = (r.timestamp || "").replace("T", " ").slice(0, 19);
+        const dollars = r.cost_usd ? `$${r.cost_usd.toFixed(2)}` : "";
+        return `<tr><td><small>${at}</small></td>` +
+               `<td><small>${r.event}</small></td>` +
+               `<td><small>${r.gpu || ""}</small></td>` +
+               `<td>${r.minutes ? r.minutes.toFixed(0) + "m" : ""}</td>` +
+               `<td>${dollars}</td></tr>`;
+      }).join("");
+      if (evRows) {
+        $("#cost-recent").innerHTML =
+          `<table><tr><th>when</th><th>event</th><th>gpu</th><th>min</th><th>$</th></tr>${evRows}</table>`;
+      } else {
+        $("#cost-recent").innerHTML = "<small>No pod events yet.</small>";
+      }
+    } else {
+      $("#cost-totals").innerHTML = `<small class="status-warn">${c.error || "?"}</small>`;
+    }
+  } catch (e) {
+    $("#cost-totals").innerHTML = `<small class="status-warn">load failed</small>`;
+  }
 }
 
 async function loadEval() {
