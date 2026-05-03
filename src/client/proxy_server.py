@@ -258,6 +258,110 @@ async def _safe_close(ws, *, code: int = 1000, reason: str = "") -> None:
 # --------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Phone-side status helpers (#9). Composed of three reads — pod, cost ledger,
+# Beacon health — assembled into one /api/status payload so the phone makes
+# one HTTP call per refresh tick.
+# ---------------------------------------------------------------------------
+
+
+def _phone_status_snapshot() -> dict:
+    """Snapshot for the phone status page. Each section degrades to
+    ok=false on its own without breaking the others."""
+    import datetime as _dt
+    payload: dict = {"ts": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+
+    # Pod read
+    try:
+        from src.client.pod_manager import PodManager, load_deployment
+        info = PodManager(load_deployment("configs/deployment.yaml")).status()
+        payload["pod"] = {
+            "ok": True,
+            "status": info.get("status", "UNKNOWN"),
+            "public_ip": info.get("public_ip", ""),
+            "uptime_seconds": int(info.get("uptime_seconds") or 0),
+            "gpu_type": info.get("gpu_type", ""),
+        }
+    except Exception as e:
+        payload["pod"] = {"ok": False, "error": str(e)}
+
+    # Cost: combine current session estimate with the ledger's monthly view.
+    cost: dict = {}
+    try:
+        rates = {
+            "A100 SXM": 1.50, "A100 PCIe": 1.20, "A100 80GB PCIe": 1.20,
+            "H100 SXM": 3.50, "H100 PCIe": 2.95, "H100 80GB HBM3": 3.50,
+            "L40S": 0.79, "RTX 4090": 0.44, "RTX 3090": 0.29,
+        }
+        gpu = (payload.get("pod") or {}).get("gpu_type") or ""
+        rate = next(
+            (v for k, v in rates.items() if k.lower() in gpu.lower()),
+            1.50,
+        )
+        upt = int((payload.get("pod") or {}).get("uptime_seconds") or 0)
+        cost["session_usd"] = round((upt / 3600.0) * rate, 2)
+        cost["hourly_usd"] = rate
+    except Exception:
+        pass
+    try:
+        from src.client.cost_ledger import buckets as _buckets
+        # Pull monthly budget if configured
+        budget = None
+        try:
+            import yaml
+            cfg = yaml.safe_load(
+                Path("configs/deployment.yaml").read_text(encoding="utf-8"),
+            ) or {}
+            raw = (cfg.get("cloud") or {}).get("monthly_budget_usd")
+            if raw is not None:
+                budget = float(raw)
+        except Exception:
+            pass
+        b = _buckets(monthly_budget_usd=budget)
+        cost["today_usd"] = b.today_usd
+        cost["this_month_usd"] = b.this_month_usd
+        cost["monthly_budget_usd"] = b.monthly_budget_usd
+        cost["over_budget"] = b.over_budget
+    except Exception:
+        pass
+    payload["cost"] = cost
+
+    # Beacon: only reach out if BEACON_URL is set. Dead/unreachable URL
+    # collapses to {configured: True, reachable: False}.
+    beacon: dict = {"configured": False}
+    url = os.environ.get("BEACON_URL", "").strip()
+    if url:
+        beacon["configured"] = True
+        try:
+            import urllib.request
+            health = url.rstrip("/") + "/v1/health"
+            with urllib.request.urlopen(health, timeout=2) as resp:
+                if resp.status == 200:
+                    beacon["reachable"] = True
+                    try:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        beacon["heartbeats"] = data.get("total_heartbeats")
+                    except Exception:
+                        pass
+                else:
+                    beacon["reachable"] = False
+        except Exception:
+            beacon["reachable"] = False
+    payload["beacon"] = beacon
+
+    return payload
+
+
+def _phone_sleep_now() -> dict:
+    """Stop the pod (the phone's stop button)."""
+    try:
+        from src.client.pod_manager import PodManager, load_deployment
+        info = PodManager(load_deployment("configs/deployment.yaml")).sleep()
+        return {"ok": True, "info": info}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # Explicit MIME map: we intentionally do not consult mimetypes.guess_type
 # for these routes because PWA correctness depends on the exact values.
 # Safari/Chrome treat application/json differently from
@@ -272,6 +376,10 @@ _STATIC_ROUTES: dict[str, tuple[str, str, dict[str, str]]] = {
     "/client.js":     ("client.js",      "application/javascript",            {}),
     "/sw.js":         ("sw.js",          "application/javascript",
                        {"Service-Worker-Allowed": "/"}),
+    # Phone-side status page (#9). Loads its own JS, hits /api/status + /api/sleep.
+    "/status":        ("status.html",    "text/html; charset=utf-8",          {}),
+    "/status.html":   ("status.html",    "text/html; charset=utf-8",          {}),
+    "/status.js":     ("status.js",      "application/javascript",            {}),
 }
 
 
@@ -327,6 +435,29 @@ def make_process_request(
                 )
             return _build(404, "Not Found", b"no cert configured\n",
                           "text/plain; charset=utf-8")
+
+        # Phone-status JSON endpoint (#9). One snapshot of pod + cost + beacon.
+        if path == "/api/status":
+            payload = _phone_status_snapshot()
+            body = json.dumps(payload).encode("utf-8")
+            return _build(200, "OK", body, "application/json", {})
+
+        # Phone-stop button (#9). POST only — we accept GET too as a defensive
+        # fallback because some embedded WebViews block POST from a static
+        # button click without an explicit form submit. The destructive
+        # action is gated on the operator tapping a confirm() dialog so
+        # accidental GETs from link previews don't sleep the pod.
+        if path == "/api/sleep":
+            method = getattr(request, "method", "POST")
+            if method not in ("POST", "GET"):
+                return _build(405, "Method Not Allowed",
+                              b"use POST\n", "text/plain; charset=utf-8",
+                              {"Allow": "POST"})
+            payload = _phone_sleep_now()
+            body = json.dumps(payload).encode("utf-8")
+            status_code = 200 if payload.get("ok") else 502
+            return _build(status_code, "OK" if payload.get("ok") else "Bad Gateway",
+                          body, "application/json", {})
 
         static = _static_response(path, web_dir)
         if static is None:
@@ -499,6 +630,16 @@ async def run_proxy(
         ping_timeout=20,
     ):
         urls = format_connect_urls(port, scheme=scheme)
+        # When the launcher exports RENEE_SESSION_TOPIC, append it as a
+        # query parameter so the QR Paul scans carries the topic into the
+        # PWA. client.js picks it off ``window.location.search`` and emits
+        # a `set_topic` WS message on first connect, which the audio
+        # bridge dispatches to ``orchestrator.set_session_topic``.
+        topic = os.environ.get("RENEE_SESSION_TOPIC", "").strip()
+        if topic:
+            from urllib.parse import quote
+            q = quote(topic, safe="")
+            urls = [f"{u.rstrip('/')}/?topic={q}" for u in urls]
         logger.info("proxy listening on %s:%d", host, port)
         png = None
         if qr_png_path is not None and urls:

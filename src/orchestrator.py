@@ -319,6 +319,9 @@ class Orchestrator:
         # an asyncio.Event on start; the orchestrator fires it after TTS
         # finishes speaking a farewell triggered by the daily cap.
         self._session_end_event: Optional[asyncio.Event] = None
+        # Per-session topic (set via set_session_topic, surfaced in the
+        # greeting prompt). None means "no topic — use the default greeting".
+        self._session_topic: Optional[str] = None
 
     def _default_library_root(self) -> Path:
         return REPO_ROOT / "paralinguistics" / self.persona_name
@@ -608,6 +611,22 @@ class Orchestrator:
     def clear_session_end_event(self) -> None:
         self._session_end_event = None
 
+    def set_session_topic(self, topic: Optional[str]) -> None:
+        """Set the conversation topic for the active session. The next
+        ``greet_on_connect`` weaves this into the greeting prompt so Renée
+        opens with topic-aware framing instead of a generic 'hi'.
+
+        Pass None to clear. Capped at 200 chars to keep the prompt sane —
+        anything longer is almost certainly a paste of unrelated text."""
+        if topic is None:
+            self._session_topic = None
+            return
+        clean = str(topic).strip()
+        if not clean:
+            self._session_topic = None
+            return
+        self._session_topic = clean[:200]
+
     def register_transcript_listener(self, conn_id: Any, cb) -> Callable[[], None]:
         """Register an async callable for the given connection id. Returns a
         ``remove()`` closure the caller invokes on disconnect. Registering
@@ -684,8 +703,16 @@ class Orchestrator:
         than waiting for him to speak first.
 
         Runs inside a task spawned by the bridge; exceptions are swallowed
-        so a greeting failure never kills the connection.
+        so a greeting failure never kills the connection. If a session
+        topic has been set (via set_session_topic, typically dispatched
+        from a `set_topic` bridge message), it's woven into the prompt.
         """
+        if self._session_topic:
+            prompt = (
+                f"system: greet paul, he just connected and wants to talk "
+                f"about: {self._session_topic}. Open with one short sentence "
+                f"acknowledging the topic so he knows you've registered it."
+            )
         try:
             output = await asyncio.to_thread(
                 self.text_turn, prompt, list(self._voice_history),

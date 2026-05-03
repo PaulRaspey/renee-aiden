@@ -146,10 +146,16 @@ def _maybe_auto_provision(args: argparse.Namespace) -> tuple[bool, str]:
         if ans != "yes":
             return False, "auto-provision cancelled by operator"
     try:
-        new = PodManager(settings).provision(gpu_type=gpu_type)
+        new = PodManager(settings).provision(
+            gpu_type=gpu_type,
+            auto_volume_setup=args.with_volume_setup,
+        )
     except Exception as e:
         return False, f"provision failed: {e}"
     print(f"      provisioned pod_id={new.get('pod_id')} ip={new.get('public_ip', '?')}", flush=True)
+    if args.with_volume_setup:
+        vs = new.get("volume_setup", "skipped")
+        print(f"      volume_setup: {vs}", flush=True)
     return True, ""
 
 
@@ -316,16 +322,20 @@ def _trigger_triage(session_dir: Path) -> Optional[subprocess.Popen]:
 
 
 def _print_topic_banner(topic: str) -> None:
-    """Big visual reminder so Paul says the topic as the first sentence.
+    """Big visual reminder + URL hint.
 
-    The orchestrator's greeting prompt is fixed at boot and a per-session
-    override would require either env-var-on-the-pod or a new bridge
-    message type. For now we surface the topic to the operator instead.
+    The PWA's connect URL accepts ``?topic=...``; client.js sends a
+    ``set_topic`` WS message on connect, the audio bridge dispatches it
+    to ``orchestrator.set_session_topic``, and ``greet_on_connect`` uses
+    it in the first prompt. The launcher prints the topic so Paul also
+    sees it before the proxy's QR shows up.
     """
     line = "=" * 60
     print(f"\n{line}", flush=True)
     print(f"  TOPIC FOR THIS SESSION: {topic}", flush=True)
-    print(f"  Say this in your first sentence so Renée picks it up.", flush=True)
+    print(f"  Connect via QR or URL with ?topic=<urlencoded> so Renée's", flush=True)
+    print(f"  first greeting acknowledges it. Tap-to-start kicks off the", flush=True)
+    print(f"  set_topic message automatically when this query is present.", flush=True)
     print(f"{line}\n", flush=True)
 
 
@@ -381,6 +391,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="If pod is missing/dead, create a fresh one (asks for confirm unless --yes)",
     )
     parser.add_argument("--yes", "-y", action="store_true", help="Skip provision confirm prompt")
+    parser.add_argument(
+        "--with-volume-setup", action="store_true",
+        help="After --auto-provision, SSH to the new pod and run volume_setup.py automatically",
+    )
     parser.add_argument("--with-beacon", action="store_true", help="Spawn local Beacon co-process")
     parser.add_argument(
         "--with-memory-bridge", action="store_true",
@@ -400,8 +414,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     os.chdir(REPO_ROOT)
     os.environ.setdefault("RENEE_SKIP_ENCRYPT_WARN", "1")
 
+    # Pull keyring-stored secrets into env so existing .env-based code paths
+    # (RUNPOD_API_KEY, GROQ_API_KEY, etc.) keep working transparently. Env
+    # values already set win — keyring only fills gaps. Failure modes
+    # (no keyring backend) are silently skipped per renee.secrets.
+    try:
+        from renee import secrets as _secrets
+        _secrets.populate_env_from_keyring()
+    except Exception:
+        # Keyring is opt-in — never block startup on it.
+        pass
+
     if args.topic:
         _print_topic_banner(args.topic)
+        # Plumb to the proxy via env so its QR bakes in ?topic=...
+        os.environ["RENEE_SESSION_TOPIC"] = args.topic
 
     total = 7
     # ---------------------------------------------------------- 1. tailscale
@@ -462,6 +489,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     wake_at = time.time()
     print(f"      ready (gpu={pod_gpu_type or '?'})", flush=True)
 
+    # Cost ledger: record this pod-up so the dashboard's monthly view sees it.
+    try:
+        from src.client.cost_ledger import record_up as _ledger_up
+        _ledger_up(
+            pod_id=pod_info.get("id", "") or "",
+            gpu_type=pod_gpu_type,
+            hourly_usd=GPU_HOURLY_USD.get(pod_gpu_type, GPU_HOURLY_USD["default"]),
+        )
+    except Exception:
+        pass
+
     # -------------------------------------------------------- 5. co-process
     coprocs: list[subprocess.Popen] = []
     if args.with_beacon or args.with_memory_bridge:
@@ -518,6 +556,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         # Cost summary (#5)
         try:
             print(f"[stop] {_pod_cost_summary(wake_at, pod_gpu_type)}", flush=True)
+        except Exception:
+            pass
+
+        # Cost ledger: record pod-down for the monthly view.
+        try:
+            from src.client.cost_ledger import record_down as _ledger_down
+            elapsed_min = max(0.0, (time.time() - wake_at) / 60.0)
+            _ledger_down(
+                pod_id=pod_info.get("id", "") or "",
+                minutes=elapsed_min,
+                hourly_usd=GPU_HOURLY_USD.get(pod_gpu_type, GPU_HOURLY_USD["default"]),
+                gpu_type=pod_gpu_type,
+            )
         except Exception:
             pass
 

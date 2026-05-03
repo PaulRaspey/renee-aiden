@@ -255,6 +255,17 @@
       hideCertOverlay();
       setOrb("listening");
       if (session.pttEnabled) setMuted(true);
+      // #2 If the connect URL carries ?topic=..., forward it so the
+      // orchestrator's first greet_on_connect uses topic-aware framing.
+      // The launcher's --topic flag now puts this on the URL printed
+      // beside the QR.
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const topic = (params.get("topic") || "").trim();
+        if (topic) {
+          session.ws.send(JSON.stringify({ type: "set_topic", text: topic }));
+        }
+      } catch (_) { /* malformed query string — fail quiet */ }
     };
     session.ws.onclose = () => {
       setStatus("reconnecting", "error");

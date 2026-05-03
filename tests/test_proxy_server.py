@@ -972,3 +972,86 @@ async def _wait_for_port(port: int, timeout: float = 3.0) -> None:
             except OSError:
                 await asyncio.sleep(0.02)
     raise TimeoutError(f"port {port} never opened")
+
+
+# ---------------------------------------------------------------------------
+# Phone-side status helpers (#9)
+# ---------------------------------------------------------------------------
+
+
+def test_status_routes_present_in_static_table():
+    """The new /status endpoints must be in _STATIC_ROUTES so the proxy
+    serves them. Catches accidental removal."""
+    assert "/status" in ps._STATIC_ROUTES
+    assert "/status.html" in ps._STATIC_ROUTES
+    assert "/status.js" in ps._STATIC_ROUTES
+    # Content types match what mobile browsers expect
+    assert ps._STATIC_ROUTES["/status"][1] == "text/html; charset=utf-8"
+    assert ps._STATIC_ROUTES["/status.js"][1] == "application/javascript"
+
+
+def test_phone_status_snapshot_with_mocked_pod(monkeypatch):
+    """The snapshot collects pod + cost + beacon. Mock all three so we can
+    exercise the assembly logic without hitting RunPod / Beacon / disk."""
+    fake_pod = {
+        "id": "p1", "status": "RUNNING", "public_ip": "1.2.3.4",
+        "uptime_seconds": 1800, "gpu_type": "NVIDIA A100 SXM",
+    }
+    monkeypatch.setattr(
+        "src.client.pod_manager.PodManager.status",
+        lambda self: fake_pod,
+    )
+    monkeypatch.delenv("BEACON_URL", raising=False)
+    snap = ps._phone_status_snapshot()
+    assert snap["pod"]["status"] == "RUNNING"
+    assert snap["pod"]["gpu_type"] == "NVIDIA A100 SXM"
+    # 30 min × $1.50/hr = $0.75
+    assert snap["cost"]["session_usd"] == pytest.approx(0.75)
+    assert snap["cost"]["hourly_usd"] == 1.50
+    # No BEACON_URL -> not configured
+    assert snap["beacon"]["configured"] is False
+
+
+def test_phone_status_snapshot_handles_pod_unreachable(monkeypatch):
+    def boom(self):
+        raise RuntimeError("no API key")
+    monkeypatch.setattr("src.client.pod_manager.PodManager.status", boom)
+    monkeypatch.delenv("BEACON_URL", raising=False)
+    snap = ps._phone_status_snapshot()
+    assert snap["pod"]["ok"] is False
+    assert "error" in snap["pod"]
+    # Cost still computes (uptime=0 -> $0)
+    assert snap["cost"]["session_usd"] == 0.0
+
+
+def test_phone_status_snapshot_beacon_unreachable_records_state(monkeypatch):
+    monkeypatch.setattr(
+        "src.client.pod_manager.PodManager.status",
+        lambda self: {
+            "id": "p", "status": "RUNNING", "public_ip": "x",
+            "uptime_seconds": 0, "gpu_type": "L40S",
+        },
+    )
+    monkeypatch.setenv("BEACON_URL", "http://127.0.0.1:1")  # nothing listens here
+    snap = ps._phone_status_snapshot()
+    assert snap["beacon"]["configured"] is True
+    assert snap["beacon"]["reachable"] is False
+
+
+def test_phone_sleep_now_returns_ok_on_success(monkeypatch):
+    monkeypatch.setattr(
+        "src.client.pod_manager.PodManager.sleep",
+        lambda self: {"status": "STOPPED", "pod_id": "p"},
+    )
+    result = ps._phone_sleep_now()
+    assert result["ok"] is True
+    assert result["info"]["status"] == "STOPPED"
+
+
+def test_phone_sleep_now_records_failure(monkeypatch):
+    def boom(self):
+        raise RuntimeError("auth failed")
+    monkeypatch.setattr("src.client.pod_manager.PodManager.sleep", boom)
+    result = ps._phone_sleep_now()
+    assert result["ok"] is False
+    assert "auth failed" in result["error"]

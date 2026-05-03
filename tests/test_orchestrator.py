@@ -511,3 +511,62 @@ async def test_register_transcript_listener_overwrites_same_conn_id(
     # receives none.
     assert 1 not in count
     assert count == [2, 2]
+
+
+# ---------------------------------------------------------------------------
+# set_session_topic + topic-aware greeting (#2)
+# ---------------------------------------------------------------------------
+
+
+def test_set_session_topic_stores_value(orchestrator: Orchestrator):
+    orchestrator.set_session_topic("memory consolidation Part 3")
+    assert orchestrator._session_topic == "memory consolidation Part 3"
+
+
+def test_set_session_topic_strips_and_clears(orchestrator: Orchestrator):
+    orchestrator.set_session_topic("  with whitespace  ")
+    assert orchestrator._session_topic == "with whitespace"
+    orchestrator.set_session_topic("")
+    assert orchestrator._session_topic is None
+    orchestrator.set_session_topic(None)
+    assert orchestrator._session_topic is None
+
+
+def test_set_session_topic_caps_at_200_chars(orchestrator: Orchestrator):
+    long = "x" * 500
+    orchestrator.set_session_topic(long)
+    assert len(orchestrator._session_topic) == 200
+
+
+@pytest.mark.asyncio
+async def test_greet_on_connect_uses_topic_when_set(orchestrator: Orchestrator):
+    """When a topic is set, the greeting prompt embeds it; absent the topic,
+    the default prompt passes through unchanged."""
+    orchestrator.set_session_topic("Hilbert spaces and pizza")
+    sent_prompts: list[str] = []
+    # Patch text_turn to capture the prompt the greeting passed in
+    original = orchestrator.text_turn
+
+    def capture(prompt, history):
+        sent_prompts.append(prompt)
+        return original(prompt, history)
+
+    orchestrator.text_turn = capture  # type: ignore[assignment]
+    await orchestrator.greet_on_connect()
+    assert sent_prompts, "greet_on_connect did not call text_turn"
+    assert "Hilbert spaces and pizza" in sent_prompts[0]
+    assert "topic" in sent_prompts[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_greet_on_connect_uses_default_when_no_topic(orchestrator: Orchestrator):
+    sent_prompts: list[str] = []
+    original = orchestrator.text_turn
+
+    def capture(prompt, history):
+        sent_prompts.append(prompt)
+        return original(prompt, history)
+
+    orchestrator.text_turn = capture  # type: ignore[assignment]
+    await orchestrator.greet_on_connect()
+    assert sent_prompts == ["system: greet paul, he just connected"]

@@ -49,6 +49,8 @@ class CloudAudioBridge:
         greet_on_connect: bool = False,
         greeting_prompt: str = "system: greet paul, he just connected",
         safety_layer: Any = None,
+        recording_enabled: Optional[bool] = None,
+        session_recorder_factory: Optional[Callable[..., Any]] = None,
     ):
         self.orchestrator = orchestrator
         self.idle_watcher = idle_watcher
@@ -69,6 +71,12 @@ class CloudAudioBridge:
                 core = getattr(orchestrator, "persona_core", None)
                 inferred = getattr(core, "safety_layer", None) if core else None
             self.safety_layer = inferred
+        # Recording wiring (Part 2 deferred -> closed). When `recording_enabled`
+        # is None we read RENEE_RECORD from env at handle_client time so each
+        # connection is independently re-checked. Tests inject a fake factory
+        # so the bridge stays unit-testable without sessions on disk.
+        self._recording_enabled_override = recording_enabled
+        self._recorder_factory = session_recorder_factory
         self._server = None
 
     # -------------------- receive (mic -> ASR pipeline) --------------------
@@ -80,6 +88,10 @@ class CloudAudioBridge:
         warned = False
         async for message in ws:
             if not isinstance(message, (bytes, bytearray)):
+                # Text frames carry control messages (set_topic, etc.).
+                # Unknown types are silently dropped so the bridge stays
+                # forward-compat with future client features.
+                self._dispatch_text_message(message)
                 continue
             pcm = bytes(message)
             if self.idle_watcher is not None:
@@ -95,6 +107,30 @@ class CloudAudioBridge:
                 await feed(pcm)
             except Exception:
                 logger.exception("orchestrator.feed_audio raised")
+
+    def _dispatch_text_message(self, raw: Any) -> None:
+        """Parse a text frame from the client and dispatch known control
+        messages. Failures are swallowed — the bridge must never crash on
+        a malformed frame from an untrusted client."""
+        try:
+            data = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            msg = json.loads(data)
+        except Exception:
+            logger.debug("ws text frame is not valid JSON; ignoring")
+            return
+        if not isinstance(msg, dict):
+            return
+        mtype = msg.get("type")
+        if mtype == "set_topic":
+            topic = msg.get("text") or msg.get("topic")
+            setter = getattr(self.orchestrator, "set_session_topic", None)
+            if callable(setter):
+                try:
+                    setter(topic)
+                except Exception:
+                    logger.exception("set_session_topic raised")
+            else:
+                logger.debug("orchestrator lacks set_session_topic; topic ignored")
 
     # -------------------- send (TTS -> speaker) --------------------
 
@@ -165,6 +201,37 @@ class CloudAudioBridge:
             def unregister() -> None:
                 self.orchestrator.transcript_emitter = prior_emitter
 
+        # Recording wiring per-connection (closes the Part 2 deferred item).
+        # The recorder taps inbound mic + outbound TTS with bit-for-bit parity
+        # via `register_audio_tap` and listens for transcripts via the same
+        # listener registry used for the WS emitter. start() mints a session
+        # dir under RENEE_SESSIONS_DIR and the QAL chain attestation.
+        recorder = self._maybe_start_recorder()
+        recorder_audio_unregister: Optional[Callable[[], None]] = None
+        recorder_transcript_unregister: Optional[Callable[[], None]] = None
+        if recorder is not None:
+            register_tap = getattr(self.orchestrator, "register_audio_tap", None)
+            if callable(register_tap):
+                try:
+                    recorder_audio_unregister = register_tap(
+                        f"recorder:{id(ws)}",
+                        getattr(recorder, "on_mic_pcm", None),
+                        getattr(recorder, "on_renee_pcm", None),
+                    )
+                except Exception:
+                    logger.exception("register_audio_tap failed")
+            register_listener = getattr(
+                self.orchestrator, "register_transcript_listener", None,
+            )
+            if callable(register_listener):
+                try:
+                    recorder_transcript_unregister = register_listener(
+                        f"recorder-tr:{id(ws)}",
+                        getattr(recorder, "on_transcript_async", None),
+                    )
+                except Exception:
+                    logger.exception("recorder transcript register failed")
+
         # Session-end event: set by the orchestrator when the daily cap
         # trips mid-session (after TTS has had a beat to speak the
         # farewell). The bridge races this against the send/receive tasks
@@ -232,6 +299,73 @@ class CloudAudioBridge:
                     unregister()
                 except Exception:
                     logger.debug("transcript unregister raised", exc_info=True)
+            if recorder_audio_unregister is not None:
+                try:
+                    recorder_audio_unregister()
+                except Exception:
+                    logger.debug("recorder audio unregister raised", exc_info=True)
+            if recorder_transcript_unregister is not None:
+                try:
+                    recorder_transcript_unregister()
+                except Exception:
+                    logger.debug("recorder transcript unregister raised", exc_info=True)
+            if recorder is not None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop raised")
+
+    # -------------------- recorder helper --------------------
+
+    def _recording_should_run(self) -> bool:
+        """Per-connection recording gate. The override on the bridge wins;
+        otherwise read RENEE_RECORD from env so flipping the env mid-pod
+        between sessions takes effect without bridge restart."""
+        if self._recording_enabled_override is not None:
+            return bool(self._recording_enabled_override)
+        import os as _os
+        return _os.environ.get("RENEE_RECORD", "0").strip().lower() in ("1", "true", "yes")
+
+    def _maybe_start_recorder(self) -> Any:
+        """Construct + start a SessionRecorder if recording is enabled AND
+        the orchestrator exposes the persona_core.identity + memory_store.
+        Returns None when any precondition isn't met — the bridge is fully
+        functional without a recorder."""
+        if not self._recording_should_run():
+            return None
+        # Identity + memory_store live on persona_core. If the orchestrator
+        # is one of the test fakes that doesn't have one, skip.
+        core = getattr(self.orchestrator, "persona_core", None)
+        identity = getattr(core, "identity", None)
+        memory_store = getattr(core, "memory_store", None)
+        if identity is None or memory_store is None:
+            logger.debug(
+                "recording requested but persona_core lacks identity/memory_store; skipping",
+            )
+            return None
+        try:
+            if self._recorder_factory is not None:
+                rec = self._recorder_factory(
+                    agent_identity=identity,
+                    memory_store=memory_store,
+                    enabled=True,
+                )
+            else:
+                from src.capture.session_recorder import SessionRecorder
+                rec = SessionRecorder(
+                    agent_identity=identity,
+                    memory_store=memory_store,
+                    enabled=True,
+                )
+            session_dir = rec.start()
+            if session_dir is None:
+                # enabled was True but the recorder declined (already-started, etc.)
+                return None
+            logger.info("session recorder started: %s", session_dir)
+            return rec
+        except Exception:
+            logger.exception("session recorder failed to start; continuing without")
+            return None
 
     # -------------------- cap gating helpers --------------------
 
