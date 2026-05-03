@@ -363,6 +363,72 @@ def test_preflight_handler_fails_when_pod_down(monkeypatch, capsys):
     assert "pod" in out
 
 
+def test_sessions_subcommand_lists_captures(tmp_path, monkeypatch, capsys):
+    """Exercise the column rendering against a tiny sessions tree."""
+    import json
+    s1 = tmp_path / "2026-05-03T20-00-00"
+    s1.mkdir()
+    (s1 / "session_manifest.json").write_text(
+        json.dumps({
+            "start_time": "2026-05-03T20:00:00",
+            "end_time": "2026-05-03T20:30:00",
+            "presence_score": 4,
+            "public": False,
+            "github_published": False,
+        }),
+        encoding="utf-8",
+    )
+    (s1 / "transcript.json").write_text(json.dumps([{"x": 1}, {"x": 2}, {"x": 3}]))
+    # An underscored "_publish_staging" should be skipped
+    (tmp_path / "_publish_staging").mkdir()
+    (tmp_path / "_publish_staging" / "session_manifest.json").write_text("{}")
+
+    monkeypatch.setattr(
+        "src.capture.session_recorder.default_sessions_root", lambda: tmp_path,
+    )
+    args = SimpleNamespace(day=None, sessions_root=None)
+    rc = cli_main.cmd_sessions(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "2026-05-03T20-00-00" in out
+    assert "30.0" in out                # 30 min duration
+    assert "_publish_staging" not in out  # underscored dirs filtered
+
+
+def test_sessions_subcommand_filters_by_day(tmp_path, monkeypatch, capsys):
+    import json
+    s1 = tmp_path / "2026-05-03T20-00-00"
+    s1.mkdir()
+    (s1 / "session_manifest.json").write_text(
+        json.dumps({"start_time": "2026-05-03T20:00:00"}),
+        encoding="utf-8",
+    )
+    s2 = tmp_path / "2026-05-04T10-00-00"
+    s2.mkdir()
+    (s2 / "session_manifest.json").write_text(
+        json.dumps({"start_time": "2026-05-04T10:00:00"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "src.capture.session_recorder.default_sessions_root", lambda: tmp_path,
+    )
+    args = SimpleNamespace(day="2026-05-03", sessions_root=None)
+    cli_main.cmd_sessions(args)
+    out = capsys.readouterr().out
+    assert "2026-05-03T20-00-00" in out
+    assert "2026-05-04T10-00-00" not in out
+
+
+def test_sessions_subcommand_handles_empty_root(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "src.capture.session_recorder.default_sessions_root", lambda: tmp_path,
+    )
+    args = SimpleNamespace(day=None, sessions_root=None)
+    rc = cli_main.cmd_sessions(args)
+    assert rc == 0
+    assert "no sessions" in capsys.readouterr().out.lower()
+
+
 def test_preflight_handler_fails_when_cap_reached(monkeypatch, capsys):
     from types import SimpleNamespace as NS
     fake_mod = NS(

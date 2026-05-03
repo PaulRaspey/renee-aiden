@@ -195,6 +195,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="SSH private key path (default RENEE_POD_SSH_KEY or ~/.ssh/id_rsa)",
     )
 
+    sessions_p = sub.add_parser(
+        "sessions",
+        help="list captured sessions with id / time / duration / score",
+    )
+    sessions_p.add_argument(
+        "--day", default=None,
+        help="filter to YYYY-MM-DD (UTC); default: all days",
+    )
+    sessions_p.add_argument(
+        "--sessions-root", default=None,
+        help="override RENEE_SESSIONS_DIR / default sessions root",
+    )
+
     report_p = sub.add_parser(
         "report",
         help="generate a Markdown report.md inside a session directory",
@@ -639,6 +652,81 @@ def _renee_version() -> str:
         return "dev"
 
 
+def cmd_sessions(args) -> int:
+    """List captured sessions in a fixed-width table.
+
+    Columns: id, start time (HH:MM), duration (min), turn count,
+    presence score, public flag. Filter to one UTC day with --day; the
+    default lists every session under the sessions root.
+    """
+    import json as _json
+    from src.capture.session_recorder import default_sessions_root
+    root = Path(args.sessions_root) if args.sessions_root else default_sessions_root()
+    if not root.exists():
+        print(f"sessions root not found: {root}")
+        return 0
+    rows: list[dict] = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        manifest_path = d / "session_manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            m = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if args.day:
+            start = (m.get("start_time") or "")
+            if not start.startswith(args.day):
+                continue
+        # Duration: prefer start/end times; fall back to manifest field
+        try:
+            from datetime import datetime
+            s = datetime.fromisoformat(m.get("start_time", "").replace("Z", ""))
+            e_raw = m.get("end_time", "")
+            if e_raw:
+                e = datetime.fromisoformat(e_raw.replace("Z", ""))
+                duration_min = round((e - s).total_seconds() / 60.0, 1)
+            else:
+                duration_min = "?"
+        except Exception:
+            duration_min = m.get("duration_minutes", "?")
+        # Transcript turn count
+        turns: int | str = "?"
+        tpath = d / "transcript.json"
+        if tpath.exists():
+            try:
+                events = _json.loads(tpath.read_text(encoding="utf-8"))
+                if isinstance(events, list):
+                    turns = len(events)
+            except Exception:
+                pass
+        rows.append({
+            "id": d.name,
+            "start": (m.get("start_time") or "")[:16].replace("T", " "),
+            "duration": duration_min,
+            "turns": turns,
+            "score": m.get("presence_score") if m.get("presence_score") is not None else "-",
+            "public": "y" if m.get("public") else "n",
+            "published": "y" if m.get("github_published") else "n",
+        })
+    if not rows:
+        print("no sessions found")
+        return 0
+    # Print fixed-width
+    print(f"{'id':<22} {'start':<16} {'min':>5} {'turns':>5} {'score':>5} {'pub':>4} {'pushed':>6}")
+    print("-" * 72)
+    for r in rows:
+        print(
+            f"{r['id']:<22} {r['start']:<16} "
+            f"{str(r['duration']):>5} {str(r['turns']):>5} "
+            f"{str(r['score']):>5} {r['public']:>4} {r['published']:>6}"
+        )
+    print(f"\n{len(rows)} session(s)")
+    return 0
+
+
 def cmd_report(args) -> int:
     """Generate a Markdown report for a captured session."""
     from src.capture.report import gather, render, write_report
@@ -894,6 +982,7 @@ HANDLERS = {
     "version": cmd_version,
     "fetch-logs": cmd_fetch_logs,
     "report": cmd_report,
+    "sessions": cmd_sessions,
 }
 
 
