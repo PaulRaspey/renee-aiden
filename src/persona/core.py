@@ -241,7 +241,21 @@ class PersonaCore:
         retrieved: list[dict] = []
         if self.memory_store is not None:
             try:
-                retrieved = self.memory_store.retrieve(user_text, mood=mood, k=8)
+                fringe_bias = None
+                bias_weight = 0.0
+                if (
+                    os.getenv("FRINGE_ENABLED", "false").lower() == "true"
+                    and self.fringe.turn_count > 0
+                ):
+                    fringe_bias = self.fringe.to_retrieval_bias()
+                    bias_weight = float(os.getenv("FRINGE_RETRIEVAL_WEIGHT", "0.3"))
+                retrieved = self.memory_store.retrieve(
+                    user_text,
+                    mood=mood,
+                    k=8,
+                    retrieval_bias=fringe_bias,
+                    bias_weight=bias_weight,
+                )
             except Exception as e:  # memory should not kill a turn
                 retrieved = []
 

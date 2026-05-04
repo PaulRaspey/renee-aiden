@@ -341,8 +341,31 @@ class MemoryStore:
         return extracted
 
     # ------------------------------------------------------------------
-    def retrieve(self, query: str, mood=None, k: int = 8, user_raised_sensitive: bool = False) -> list[dict]:
+    def retrieve(
+        self,
+        query: str,
+        mood=None,
+        k: int = 8,
+        user_raised_sensitive: bool = False,
+        retrieval_bias: np.ndarray | None = None,
+        bias_weight: float = 0.0,
+    ) -> list[dict]:
         q_emb = self.embedding.embed(query)
+        # Optional fringe bias: blend a topical bias vector into the query
+        # embedding before scoring. When retrieval_bias is None or
+        # bias_weight == 0, behavior is identical to the unbiased path.
+        if retrieval_bias is not None and bias_weight > 0.0:
+            try:
+                bias = np.asarray(retrieval_bias, dtype="float32")
+                if bias.shape == q_emb.shape and float(np.linalg.norm(bias)) > 1e-6:
+                    w = float(max(0.0, min(1.0, bias_weight)))
+                    blended = (1.0 - w) * q_emb + w * bias
+                    n = float(np.linalg.norm(blended))
+                    if n > 1e-9:
+                        q_emb = (blended / n).astype("float32")
+            except Exception:
+                # bias is best-effort; never fail retrieval over it
+                pass
         # load everything (small-scale personal memory, fine)
         with sqlite3.connect(self.db_path) as con:
             rows = list(con.execute(
