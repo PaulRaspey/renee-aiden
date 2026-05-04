@@ -19,6 +19,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..cognition import (
+    AffectScorer,
+    FringeState,
+    LoopTracker,
+    PressureComputer,
+    RegisterDetector,
+    Turn as FringeTurn,
+)
 from ..eval.metrics import MetricsStore, TurnMetric
 from ..identity import ReneeIdentityManager, sign_receipt, CompletionReceipt
 from .filters import OutputFilters, FilterReport
@@ -200,6 +208,19 @@ class PersonaCore:
         self.style_reference: StyleReference | None = load_style_reference(style_ref_path)
         self.safety_layer = safety_layer
 
+        # Cognition layer (M16). Per-persona fringe state plus stateless
+        # heuristic scorers/trackers. Only active when FRINGE_ENABLED env
+        # var is true; otherwise the components exist but update() is never
+        # called. See DECISIONS.md for the architectural rationale.
+        embedder = self.memory_store.embedding if self.memory_store is not None else None
+        embedder_dim = embedder.dim if embedder is not None else 384
+        self.fringe = FringeState(embedding_dim=embedder_dim)
+        self._fringe_embedder = embedder
+        self._affect_scorer = AffectScorer()
+        self._register_detector = RegisterDetector()
+        self._loop_tracker = LoopTracker()
+        self._pressure_computer = PressureComputer(embedder=embedder)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -319,6 +340,24 @@ class PersonaCore:
                 self.memory_store.write_turn(user_text=user_text, assistant_text=report.text, mood=new_mood)
             except Exception:
                 pass
+
+        # 7a. fringe update (post-memory, pre-telemetry). Toggled by
+        # FRINGE_ENABLED. Per-persona slow state biasing the next turn's
+        # retrieval and prompt prefix. Failures are swallowed inside
+        # FringeState.update so a broken fringe never breaks the turn.
+        if os.getenv("FRINGE_ENABLED", "false").lower() == "true" and self._fringe_embedder is not None:
+            self.fringe.update(
+                turn=FringeTurn(
+                    user=user_text,
+                    assistant=report.text,
+                    mood=new_mood,
+                ),
+                embedder=self._fringe_embedder,
+                affect_scorer=self._affect_scorer,
+                register_detector=self._register_detector,
+                loop_tracker=self._loop_tracker,
+                pressure_computer=self._pressure_computer,
+            )
 
         # 8. UAHP completion receipt + health cap evaluation. Duration is
         # measured before the receipt is signed so the receipt reflects the
