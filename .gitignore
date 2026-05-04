@@ -28,6 +28,7 @@ Thumbs.db
 
 # State and data (local, not committed)
 state/
+data/
 logs/
 voices/**/*.wav
 voices/**/*.mp3

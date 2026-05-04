@@ -28,6 +28,7 @@ from ..cognition import (
     RegisterDetector,
     Turn as FringeTurn,
 )
+from ..cognition.fringe_tracer import FringeTracer
 from ..eval.metrics import MetricsStore, TurnMetric
 from ..identity import ReneeIdentityManager, sign_receipt, CompletionReceipt
 from .filters import OutputFilters, FilterReport
@@ -225,6 +226,10 @@ class PersonaCore:
         self._register_detector = RegisterDetector()
         self._loop_tracker = LoopTracker()
         self._pressure_computer = PressureComputer(embedder=embedder)
+        # Append-only JSONL trace logger for the FRINGE_ENABLED A/B eval.
+        # Reads FRINGE_TRACE_PATH at trace time; safe to construct even
+        # when FRINGE_ENABLED is false (it's never called in that case).
+        self.fringe_tracer = FringeTracer()
 
     # ------------------------------------------------------------------
     # Public API
@@ -372,14 +377,16 @@ class PersonaCore:
         # retrieval and prompt prefix. Failures are swallowed inside
         # FringeState.update so a broken fringe never breaks the turn.
         # Persisted after every update so cross-session continuity survives
-        # crashes mid-conversation.
+        # crashes mid-conversation. Append-only trace line written for the
+        # A/B eval week after persistence.
         if os.getenv("FRINGE_ENABLED", "false").lower() == "true" and self._fringe_embedder is not None:
+            fringe_turn = FringeTurn(
+                user=user_text,
+                assistant=report.text,
+                mood=new_mood,
+            )
             self.fringe.update(
-                turn=FringeTurn(
-                    user=user_text,
-                    assistant=report.text,
-                    mood=new_mood,
-                ),
+                turn=fringe_turn,
                 embedder=self._fringe_embedder,
                 affect_scorer=self._affect_scorer,
                 register_detector=self._register_detector,
@@ -390,6 +397,16 @@ class PersonaCore:
                 self.fringe_store.save(self.fringe)
             except Exception:
                 pass  # persistence failure must not break the turn
+            # Trace logging: pass the prefix that actually shaped this turn's
+            # prompt (computed at step 3, pre-update). For the first turn
+            # this is None — log empty so downstream analysis sees an honest
+            # "no prefix was injected" record.
+            self.fringe_tracer.trace(
+                persona_name=self.persona_name,
+                turn_id=fringe_turn.turn_id,
+                fringe_state=self.fringe,
+                prompt_prefix=fringe_prefix or "",
+            )
 
         # 8. UAHP completion receipt + health cap evaluation. Duration is
         # measured before the receipt is signed so the receipt reflects the

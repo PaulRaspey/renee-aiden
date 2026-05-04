@@ -72,6 +72,7 @@ def _make_persona(tmp_path: Path, router: _FakeRouter) -> PersonaCore:
 
 def test_fringe_disabled_keeps_state_at_zero(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FRINGE_ENABLED", "false")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
     router = _FakeRouter()
     pc = _make_persona(tmp_path, router)
 
@@ -87,6 +88,7 @@ def test_fringe_disabled_keeps_state_at_zero(tmp_path: Path, monkeypatch):
 def test_fringe_enabled_increments_and_injects_prefix(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FRINGE_ENABLED", "true")
     monkeypatch.setenv("FRINGE_RETRIEVAL_WEIGHT", "0.3")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
     router = _FakeRouter()
     pc = _make_persona(tmp_path, router)
 
@@ -106,6 +108,7 @@ def test_fringe_enabled_increments_and_injects_prefix(tmp_path: Path, monkeypatc
 
 def test_fringe_loop_tracker_picks_up_defer_marker(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FRINGE_ENABLED", "true")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
     router = _FakeRouter(response_text="let me think about that and i'll come back to it")
     pc = _make_persona(tmp_path, router)
 
@@ -117,6 +120,7 @@ def test_fringe_loop_tracker_picks_up_defer_marker(tmp_path: Path, monkeypatch):
 
 def test_fringe_persists_across_personacore_instances(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FRINGE_ENABLED", "true")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
 
     # First PersonaCore: drive a few turns.
     router1 = _FakeRouter()
@@ -138,6 +142,7 @@ def test_prompt_prefix_changes_as_register_evolves(tmp_path: Path, monkeypatch):
     """Drive several intimate-register turns and confirm the prompt prefix
     eventually reflects intimate register."""
     monkeypatch.setenv("FRINGE_ENABLED", "true")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
     intimate_reply = "i love you. i miss you. i feel scared too. i trust you completely."
     router = _FakeRouter(response_text=intimate_reply)
     pc = _make_persona(tmp_path, router)
@@ -159,6 +164,7 @@ def test_prompt_prefix_changes_as_register_evolves(tmp_path: Path, monkeypatch):
 def test_fringe_failure_does_not_break_turn(tmp_path: Path, monkeypatch):
     """If the fringe blows up internally, respond() must still succeed."""
     monkeypatch.setenv("FRINGE_ENABLED", "true")
+    monkeypatch.setenv("FRINGE_TRACE_PATH", str(tmp_path / "traces"))
     router = _FakeRouter()
     pc = _make_persona(tmp_path, router)
 
