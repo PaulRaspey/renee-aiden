@@ -415,3 +415,57 @@ Groq filter fix in one session. No live audio or GPU still.
       `scripts/volume_setup.py` or a future `import` command can feed
       back into a fresh pod. Keeps the round-trip story honest: what
       you export is exactly what's on disk.
+
+---
+
+## 2026-05-03 — M16 cognition layer (FringeState)
+
+**Context:** Pre-first-audio-session prep. Wanted a cognitive layer that
+tracks where a conversation is heading rather than what it is presently
+about, so that retrieval and the next response are biased by the
+*direction* of the dialogue rather than only its surface content.
+Jamesian "fringe" architecture: the felt edge of attention around the
+focal content of the moment.
+
+**Decisions:**
+
+59. **FringeState as a persona-keyed slow cognitive state.**
+    - One FringeState per PersonaCore. Updated once per turn after the
+      memory write and before telemetry/return. Encodes: a topical
+      embedding (EMA over recent turns), a 6-dim affective tilt
+      (sharpening/softening/opening/closing/warming/cooling), a
+      3-simplex register tilt (technical/intimate/playful), a list of
+      decaying open loops, and a [-1, 1] temporal-pressure scalar
+      (building vs wandering). Architecture is persona-agnostic — when
+      `matt.yaml` lands, his fringe is automatic via the existing
+      `PersonaCore.persona_name` keying.
+
+60. **Toggleable via FRINGE_ENABLED for clean A/B evaluation.**
+    - Off by default. When off, PersonaCore.respond() is byte-identical
+      to before. When on, fringe biases retrieval (blended via
+      `FRINGE_RETRIEVAL_WEIGHT`, default 0.3) and prepends a `[FRINGE]
+      …[/FRINGE]` block to the system prompt after the persona-name
+      opener. We can run pre/post sessions side-by-side.
+
+61. **Heuristic v1 for affect, register, loop, pressure.**
+    - Keyword/punctuation/length signals only. No model calls in the
+      cognition layer. Both user and assistant text scored with 0.4 /
+      0.6 weighting (assistant choices are more deliberate than user
+      transcription). Cheap enough to run on every turn; replaceable
+      with a small LLM later if v1 misjudges drift in practice.
+
+62. **Failures inside fringe.update are swallowed.**
+    - The fringe is anticipatory bias, not load-bearing state. A broken
+      embedder or scorer must not break a turn. Errors are logged at
+      ERROR level and the partial state is left intact for the next
+      update to overwrite.
+
+63. **JSON persistence with decay-on-load.**
+    - Per-persona file at `<state_dir>/<persona>_fringe.json` (matching
+      the MoodStore pattern). FRINGE_PERSIST_PATH env var overrides the
+      directory if set. On load, `decay_to_now()` applies a 0.95**hours
+      attenuation (half-life ~13.5h) to topical/affective/pressure/loop
+      magnitudes — so resuming a session 18 hours later starts from a
+      softened version of the last fringe rather than a stale-fresh
+      one. Register stays unattenuated; it is identity-adjacent and
+      should not fade with the wall clock.

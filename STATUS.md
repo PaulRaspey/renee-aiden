@@ -6,14 +6,14 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 ## Current State
 
-**Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20; session capture pipeline (Part 2) landed 2026-04-20 on feat/session-capture. Phases 1-5 of the burn-in preamble all green. src/capture/ now owns session recording with QAL genesis, review dep detection, triage (WhisperX + Parselmouth + pyannote + latency + fatigue + safety extraction), the dashboard Sessions tab, review notes with #tag highlights, selective GitHub publishing with attestation manifests, and one-command startup. Session 1 will mint the live QAL genesis + global_chain_root.json on first record.
-**Branch:** feat/session-capture (seven commits on top of main after Part 1 merge; merge manually).
+**Phase:** M15 pre-burn-in guardrails wired (2026-04-19); UAHP gap closure Part 1 landed 2026-04-20; session capture pipeline (Part 2) landed 2026-04-20 on feat/session-capture. M16 fringe cognitive layer landed 2026-05-03 on feat/fringe-state stacked on top of feat/session-capture. Phases 1-5 of the burn-in preamble all green. src/capture/ owns session recording with QAL genesis, review dep detection, triage (WhisperX + Parselmouth + pyannote + latency + fatigue + safety extraction), the dashboard Sessions tab, review notes with #tag highlights, selective GitHub publishing with attestation manifests, and one-command startup. src/cognition/ now owns the per-persona FringeState that biases retrieval and the system prompt. Session 1 will mint the live QAL genesis + global_chain_root.json on first record.
+**Branch:** feat/fringe-state stacked on feat/session-capture (nine commits; rebase + merge after PJ reviews).
 **Repo:** https://github.com/PaulRaspey/renee-aiden (public, with sister repos at /beacon, /memory-bridge, /renee-pwa)
 **Last commit:** see git log; feat/session-capture carries 7 commits - session recorder, review deps installer, triage pipeline, dashboard Sessions tab, review notes, GitHub publishing, one-command startup.
 **Next milestone:** M15 daily burn-in begins after Part 2 merge. First run is a 2-hour window, neutral-to-good baseline only, with the dashboard Health + Sessions tabs watched for drift and triage-flag surprises.
 **Blockers:** Two deferred items in state/m15_readiness.md require the live pod (cold wake, real-bridge latency). Phone-side manual cert trust from prior sessions still outstanding.
 
-**Test summary:** 657 tests passing. Part 2 added 135 tests across seven new capture test files (session recorder 22, install review deps 21, triage 23, dashboard sessions 28, review notes 14, publish 16, start recording 11). Part 1 added 51 UAHP tests, Phase 1-4 added 79 tests earlier. 4 pre-existing memory tests still fail on HuggingFace network access only.
+**Test summary:** 896 tests passing, 5 skipped. M16 added 56 cognition tests (FringeState 13, AffectScorer 8, RegisterDetector 6, LoopTracker 7, PressureComputer 7, FringeStore 7, integration 6) — full suite green with FRINGE_ENABLED both on and off. Part 2 added 135 tests across seven capture test files. Part 1 added 51 UAHP tests, Phase 1-4 added 79 tests earlier.
 
 **M15 readiness:** `state/m15_readiness.md` - 13 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
 
@@ -217,6 +217,19 @@ Incidental fixes: none.
 - Off-OptiPlex archive: the sessions root is durable on the OptiPlex but not replicated. Sketch a backup target (cloud bucket, or second NAS) before the session count exceeds 30.
 - Audio tap wiring on pod-side orchestrator: the `register_audio_tap` contract is in place and tested with bit-for-bit parity, but `cloud_startup.py` does not yet wire the session recorder in. Production recording needs `cloud_startup.py` to instantiate a SessionRecorder against the live orchestrator's identity + memory_store and call `register_audio_tap(conn_id, rec.on_mic_pcm, rec.on_renee_pcm)` plus `register_transcript_listener(conn_id, rec.on_transcript_async)` per connection. Documented here since the .bat wrapper + env var are ready; the wiring edit is one-file and non-invasive.
 - MemoryVault encryption, clip library, phone dashboard, off-OptiPlex backup: explicitly out of scope for Part 2. PJ decides after session 1 which to prioritize.
+
+---
+
+## Verified steps (this session: 2026-05-03, M16 fringe cognitive layer)
+
+### Step 25: FringeState anticipatory bias layer
+Verified 2026-05-03 on matrix.
+Exercised: built `src/cognition/` with FringeState dataclass (topical EMA, 6-dim affective tilt, 3-simplex register, decaying open loops, [-1,1] temporal pressure), heuristic v1 scorers (affect, register, loop, pressure), JSON FringeStore with decay-on-load, full integration into `PersonaCore.respond()`. With FRINGE_ENABLED=true and a real MemoryStore embedder, drove sequences of mock turns and asserted: turn_count increments, [FRINGE] block appears in the system prompt from turn 2 onward (turn 1 stays unbiased), defer markers like "let me think about" register as open loops, sustained intimate input drives the prompt prefix to intimate register, fringe persists JSON across PersonaCore instances, decay_to_now attenuates 24h-old state at 0.95**24 ≈ 0.29, broken embedder is swallowed and the turn still produces output. With FRINGE_ENABLED=false (default), respond() is byte-identical to pre-M16 — verified by the full 896-test suite passing in both modes.
+Incidental fixes:
+- `src/persona/core.py`: routed FRINGE_PERSIST_PATH env var to FringeStore so the fringe directory can be moved without changing state_dir.
+- `src/memory/store.py`: extended `MemoryStore.retrieve()` with optional `retrieval_bias` + `bias_weight` kwargs that blend the bias into the query embedding when set; behavior with `bias_weight=0` is byte-identical to before.
+- `src/persona/prompt_assembler.py`: added optional `fringe_prefix` kwarg to `build_system_prompt`; when present it lands in a `[FRINGE]…[/FRINGE]` block after the persona-name opener, before PRIME DIRECTIVES — visually distinct in prompt logs.
+Deferred: Heuristic v1 scorers may misjudge drift in practice; a small-LLM v2 is the obvious next iteration but only after the first audio session shows whether v1 is good enough.
 
 ---
 
