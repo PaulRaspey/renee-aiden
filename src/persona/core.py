@@ -260,12 +260,19 @@ class PersonaCore:
                 retrieved = []
 
         # 3. prompt assembly
+        fringe_prefix: str | None = None
+        if (
+            os.getenv("FRINGE_ENABLED", "false").lower() == "true"
+            and self.fringe.turn_count > 0
+        ):
+            fringe_prefix = self.fringe.to_prompt_prefix()
         system_prompt = build_system_prompt(
             self.persona,
             mood,
             retrieved_memories=retrieved,
             core_facts=core_facts,
             style_reference=self.style_reference,
+            fringe_prefix=fringe_prefix,
         )
         # PII scrub on the user-facing text + message history + core facts
         # before handing anything to a cloud LLM. Mapping is unscrubbed on

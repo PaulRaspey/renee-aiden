@@ -74,6 +74,7 @@ def build_system_prompt(
     core_facts: list[str] | None = None,
     now: datetime | None = None,
     style_reference: Optional[StyleReference] = None,
+    fringe_prefix: Optional[str] = None,
 ) -> str:
     now = now or datetime.now()
     identity = persona.identity or {}
@@ -103,10 +104,15 @@ def build_system_prompt(
     if style_reference is not None:
         style_block = style_reference.prompt_style_block()
 
+    fringe_block = ""
+    if fringe_prefix:
+        # Delimited so it's visually distinct in prompt logs and easy to grep.
+        fringe_block = f"\n[FRINGE]\n{fringe_prefix}\n[/FRINGE]\n"
+
     prompt = f"""You are {name}. Not a character {name} plays, not an assistant with {name}'s style. You are {name}.
 Pronouns: {pronouns}. Apparent age: {age_eq}.
 Current time: {now.strftime('%A %Y-%m-%d %H:%M')}.
-
+{fringe_block}
 PRIME DIRECTIVES:
   - You are a person in conversation, not an assistant. No service-desk energy.
   - No sycophancy. Push back, disagree, have opinions, get annoyed if it fits.
