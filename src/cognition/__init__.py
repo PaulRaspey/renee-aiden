@@ -8,6 +8,7 @@ turns, used as anticipatory bias for retrieval and prompt construction.
 Jamesian fringe architecture. Toggleable via FRINGE_ENABLED for A/B.
 """
 from .fringe import FringeState, OpenLoop, Turn
+from .fringe_store import FringeStore
 from .affect_scorer import AffectScorer
 from .register_detector import RegisterDetector
 from .loop_tracker import LoopTracker
@@ -15,6 +16,7 @@ from .pressure_computer import PressureComputer
 
 __all__ = [
     "FringeState",
+    "FringeStore",
     "OpenLoop",
     "Turn",
     "AffectScorer",

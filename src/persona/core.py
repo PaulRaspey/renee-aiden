@@ -22,6 +22,7 @@ from pathlib import Path
 from ..cognition import (
     AffectScorer,
     FringeState,
+    FringeStore,
     LoopTracker,
     PressureComputer,
     RegisterDetector,
@@ -214,7 +215,11 @@ class PersonaCore:
         # called. See DECISIONS.md for the architectural rationale.
         embedder = self.memory_store.embedding if self.memory_store is not None else None
         embedder_dim = embedder.dim if embedder is not None else 384
-        self.fringe = FringeState(embedding_dim=embedder_dim)
+        # FRINGE_PERSIST_PATH overrides the directory if set; otherwise the
+        # fringe lives alongside mood/identity in state_dir.
+        fringe_dir = Path(os.getenv("FRINGE_PERSIST_PATH", str(self.state_dir)))
+        self.fringe_store = FringeStore(self.persona_name, fringe_dir)
+        self.fringe = self.fringe_store.load(embedding_dim=embedder_dim)
         self._fringe_embedder = embedder
         self._affect_scorer = AffectScorer()
         self._register_detector = RegisterDetector()
@@ -366,6 +371,8 @@ class PersonaCore:
         # FRINGE_ENABLED. Per-persona slow state biasing the next turn's
         # retrieval and prompt prefix. Failures are swallowed inside
         # FringeState.update so a broken fringe never breaks the turn.
+        # Persisted after every update so cross-session continuity survives
+        # crashes mid-conversation.
         if os.getenv("FRINGE_ENABLED", "false").lower() == "true" and self._fringe_embedder is not None:
             self.fringe.update(
                 turn=FringeTurn(
@@ -379,6 +386,10 @@ class PersonaCore:
                 loop_tracker=self._loop_tracker,
                 pressure_computer=self._pressure_computer,
             )
+            try:
+                self.fringe_store.save(self.fringe)
+            except Exception:
+                pass  # persistence failure must not break the turn
 
         # 8. UAHP completion receipt + health cap evaluation. Duration is
         # measured before the receipt is signed so the receipt reflects the
