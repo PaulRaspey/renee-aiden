@@ -63,6 +63,12 @@ class LLMResponse:
     latency_ms: float
     input_tokens: int = 0
     output_tokens: int = 0
+    # The exact system prompt handed to the backend for this response. Set in
+    # generate() (the single funnel), never read by the turn logic — a passive
+    # carry-out so the telemetry tap can see what was actually sent. This is
+    # how indirect injection is detected: malicious text lands by getting into
+    # the assembled prompt via retrieval, so the prompt is the evidence.
+    prompt_sent: str = ""
 
 
 def _read_bridge_key() -> str | None:
@@ -161,9 +167,11 @@ class LLMRouter:
             backend = self.decide_backend(user_text or "", "normal")
 
         if not allow_fallback:
-            return self._generate_one(
+            resp = self._generate_one(
                 backend, system_prompt, messages, temperature, max_tokens,
             )
+            resp.prompt_sent = system_prompt
+            return resp
 
         t0 = time.time()
         errors: list[tuple[Backend, Exception]] = []
@@ -178,6 +186,7 @@ class LLMRouter:
                         b, len(errors),
                         [(eb, type(ex).__name__) for eb, ex in errors],
                     )
+                resp.prompt_sent = system_prompt
                 return resp
             except Exception as e:
                 errors.append((b, e))
@@ -194,6 +203,7 @@ class LLMRouter:
             backend=backend,
             model="fallback",
             latency_ms=(time.time() - t0) * 1000,
+            prompt_sent=system_prompt,
         )
 
     def _generate_one(
