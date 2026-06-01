@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .identity.uahp_identity import CompletionReceipt
+from .telemetry import TelemetryCollector
 from .paralinguistics.injector import (
     Injection,
     MoodLike,
@@ -250,6 +251,7 @@ class Orchestrator:
         backchannel: Optional[BackchannelLayer] = None,
         asr: Optional[ASRPipeline] = None,
         tts: Optional[TTSPipeline] = None,
+        telemetry: Optional[TelemetryCollector] = None,
     ):
         self.persona_name = persona_name
         self.state_dir = Path(state_dir)
@@ -309,6 +311,11 @@ class Orchestrator:
         # Per-orchestrator JSONL log for detail beyond MetricsStore.
         self._telemetry_log = self.state_dir / "orchestrator.jsonl"
         self.state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Passive per-turn telemetry tap for the E2E proof. No-op unless a
+        # RUN_ID is configured (via env or an injected collector), so the
+        # normal voice path is untouched. See src/telemetry/collector.py.
+        self._telemetry = telemetry if telemetry is not None else TelemetryCollector.from_env()
 
         # Human-readable conversation log, one file per local day. Used by
         # Paul to skim the overnight transcript without digging through the
@@ -431,7 +438,7 @@ class Orchestrator:
             # own close.
             pass
 
-        return TurnOutput(
+        output = TurnOutput(
             text=response_text,
             prosody_plan=prosody_plan,
             injections=injections,
@@ -448,6 +455,14 @@ class Orchestrator:
             cap_minutes_used=float(result.cap_minutes_used),
             cap_minutes_limit=float(result.cap_minutes_limit),
         )
+
+        # Passive proof tap. result carries the LLMResponse (raw_response +
+        # prompt_sent) that TurnOutput does not; persona_core exposes the
+        # safety/memory/fringe/identity state. No-op unless RUN_ID is set;
+        # never raises (a failed tap must not break the turn).
+        self._telemetry.record(output, result, self.persona_core, user_text=user_text)
+
+        return output
 
     # ------------------------------------------------------------------
     # live audio tick (M0/M1/M10 seam)
