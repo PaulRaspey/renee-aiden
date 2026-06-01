@@ -30,6 +30,7 @@ Thumbs.db
 state/
 data/
 logs/
+runs/
 voices/**/*.wav
 voices/**/*.mp3
 voices/**/*.npy
