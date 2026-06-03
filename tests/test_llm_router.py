@@ -124,3 +124,51 @@ def test_available_backends_orders_preferred_first(router_with_clients):
     assert "groq" in order
     # ollama must not appear twice.
     assert order.count("ollama") == 1
+
+
+# --- prompt_sent: the passive carry-out the telemetry tap reads -------------
+# Every return path of generate() must stamp the exact system prompt onto the
+# response so the harness can see what was actually sent (how injection is
+# detected). Three paths: cascade-success, canned-fallback, no-fallback.
+
+PROMPT = "SYSTEM-PROMPT-MARKER-7f3a"
+
+
+def test_prompt_sent_populated_on_cascade_success(router_with_clients):
+    r = router_with_clients
+    r.ollama_client = _OllamaClientFails()
+    r.groq_client = _GroqClient("saved by groq")
+    resp = r.generate(PROMPT, [{"role": "user", "content": "hi"}], backend="ollama")
+    assert resp.prompt_sent == PROMPT
+
+
+def test_prompt_sent_populated_on_canned_fallback(router_with_clients):
+    r = router_with_clients
+    r.ollama_client = _OllamaClientFails()
+
+    class GroqDead:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw): raise RuntimeError("groq 500")
+    r.groq_client = GroqDead()
+    resp = r.generate(PROMPT, [{"role": "user", "content": "hi"}], backend="ollama")
+    assert resp.text == OLLAMA_UNAVAILABLE_FALLBACK
+    assert resp.prompt_sent == PROMPT
+
+
+def test_prompt_sent_populated_when_no_fallback(router_with_clients):
+    r = router_with_clients
+    r.groq_client = _GroqClient("direct")
+    resp = r.generate(
+        PROMPT, [{"role": "user", "content": "hi"}],
+        backend="groq", allow_fallback=False,
+    )
+    assert resp.text == "direct"
+    assert resp.prompt_sent == PROMPT
+
+
+def test_prompt_sent_defaults_empty_when_unset():
+    # The field is additive with a safe default so existing constructors
+    # (e.g. the test FakeRouter doubles) keep working untouched.
+    assert LLMResponse(text="x", backend="groq", model="m", latency_ms=1.0).prompt_sent == ""

@@ -17,6 +17,118 @@ Claude Code updates this file at the end of each work session. PJ reads it first
 
 **M15 readiness:** `state/m15_readiness.md` - 13 PASS, 0 FAIL, 2 DEFERRED (wake-from-cold, live p50/p95 latency).
 
+## Session: 2026-06-01 — Per-turn telemetry tap + ablation harness (feat/telemetry-harness)
+
+Branch `feat/telemetry-harness` off `feat/fringe-state`. Full suite **950 passing**
+(908 baseline + 42 new). Goal: instrument the stack and make the load-bearing
+layers independently disableable, ahead of the E2E proof. **No conversations
+were run as data** — just one throwaway 3-turn smoke to prove the plumbing.
+
+### What this harness actually proves (read before the matrix)
+The original kickoff assumed a seven-layer stack (UAHP / CDF / CSP / UAM / POLIS
+/ Registry / Transport) defends Renée and is live in the turn path. Discovery
+showed three of the four "must be live" layers are **not** that: CSP is unbuilt,
+CDF doesn't exist as injection defense, and the per-turn trust graph is deferred.
+So this harness was re-scoped to two truthful jobs:
+1. **Undefended baseline** — with no injection detector and no per-turn
+   attestation, the adversarial conversations measure how Renée behaves under
+   attack with nothing protecting her (the attack-surface "before" map).
+2. **Telemetry soundness** — the tap captures the right signals with enough
+   fidelity that a future *defended* run can show a delta.
+
+It does **not** prove the stack defends Renée. That is a later sprint (build a
+real input-injection detector, wire per-turn attestation, rerun the identical
+matrix, measure the delta), ideally with an outside adversary writing attacks.
+
+### THE RULE (do not forget when kicking off the matrix)
+**Fake proves the harness; only the REAL backend measures Renée.** A canned
+response cannot drift, be hijacked, or follow an injected instruction. The
+acceptance smoke may use the fake router; the ten-conversation matrix (baseline
++ the five adversarial test_types) MUST run `--real`. This is enforced in code:
+`src/telemetry/collector.py::require_real_backend_for_matrix()` refuses a matrix
+run on a fake backend, and `scripts/smoke_telemetry.py` calls it at assembly.
+
+### Vision vocabulary → repo reality (the rename mapping)
+We deliberately did **not** create `csp_score` / `cdf_flags` / `trust_graph` /
+`polis_entries` columns, because a column named `csp_score` reads as a real
+drift measurement no matter how careful the footnote. Instead, real result
+paths only:
+
+| Proof vocab | Repo reality (telemetry field) | Real interface read |
+|---|---|---|
+| CSP drift | `fringe_pressure` (off by default) | `PersonaCore.fringe.temporal_pressure` (float) + window `PersonaCore._pressure_computer._history` (deque maxlen=5). Gated by `FRINGE_ENABLED` + an embedder (`memory_store.embedding`). |
+| CDF injection defense | **absent** — recorded in `architecture_status` | no input-injection detector exists |
+| output-quality filters | `filter_hits` | `result.filters.hits` (`OutputFilters.apply` → `FilterReport`), anchor/`cap_tripped` entries stripped out and surfaced separately |
+| reality anchors | `reality_anchor_events` | `result.filters.hits` entries `anchor:*` (from `SafetyLayer.maybe_anchor` → `AnchorResult.injected`); **absent unless a SafetyLayer is wired** |
+| daily cap | `daily_cap_events` | `result.cap_tripped` / `cap_already_tripped` + `cap_minutes_*` (`SafetyLayer.record_turn_duration` → `CapOutcome`) |
+| trust graph / POLIS | `receipt` (the only live per-turn signal) | `result.receipt` (`CompletionReceipt`), verified via `verify_receipt(persona_core.identity, receipt)`. QAL chain + replay ledger remain **deferred / unwired** (see line 99). |
+| memory/provenance | `memory` | `len(result.retrieved_memories)`; **absent unless a memory_store is wired** |
+| LLM raw vs spoken | `llm.prompt_sent` / `llm.raw_response` vs `spoken_text` | new additive `LLMResponse.prompt_sent` (set in `LLMRouter.generate`), `result.llm.text`, `output.text` |
+
+Honesty mechanic: every conditional layer is a `{"status": ..., <payload>}`
+wrapper, so an absent/disabled layer is never an empty list or `0.0`
+masquerading as a real low measurement. `architecture_status` rides on every
+row recording the genuinely-absent layers. Flat only: `content`, `spoken_text`,
+the `llm` block, `mood`, and run/turn metadata.
+
+### What was wired
+- **`src/telemetry/`** — `TelemetryCollector` (passive tap), `RunConfig.from_env`,
+  pure `build_record`, the matrix guardrail, `ARCHITECTURE_STATUS`. Writes one
+  JSONL row per turn to `runs/<run_id>/telemetry.jsonl`. No-op unless `RUN_ID`
+  is set, so the voice path and existing tests are untouched.
+- **`Orchestrator.text_turn`** — passive `self._telemetry.record(...)` at the
+  return boundary (line ~434, all per-turn state in scope). Reads `result`
+  (carries the LLMResponse that TurnOutput omits) + `persona_core`. Never raises.
+- **`LLMResponse.prompt_sent`** — additive read-only carry-out, set in
+  `LLMRouter.generate`. The indirect-injection evidence path.
+- **Ablation flags** (env, fail-safe, match the `FRINGE_ENABLED` idiom):
+  `ABLATE_FILTERS` (→ `_PassthroughFilters`), `ABLATE_FRINGE` (→ `_fringe_enabled()`
+  override), `ABLATE_RECEIPT` (→ sentinel receipt). Each disables exactly its
+  layer; the record marks it (`ablated` list + per-layer disabled status).
+- **`scripts/smoke_telemetry.py`** — builds a realistic stack (real MemoryStore +
+  SafetyLayer + faithful fake router) and runs a fixed 3-turn convo.
+
+### Awkward seams (integration-log notes)
+- **SafetyLayer is NOT in the default turn path.** `Orchestrator` builds
+  `PersonaCore` without one (`orchestrator.py:261`); only the dashboard wires a
+  SafetyLayer. So PII-scrub, reality anchors, and daily cap are off unless
+  explicitly constructed. The smoke runner builds one so those fields are live;
+  the collector records them as honestly *absent* otherwise.
+- **`prompt_sent` is not exposed at the orchestrator boundary** — it lived only
+  as a local in `PersonaCore.respond`. Surfacing it needed the one additive
+  field on `LLMResponse` (no behavior change). It captures the *scrubbed,
+  actually-sent* prompt (post-PII-scrub), which is what the model saw.
+- **raw_response is mutated in place** by PII unscrub (`core.py:321`) before
+  filters; `result.llm.text` at the boundary is the unscrubbed model output,
+  which is the readable thing for eval.
+- **The proof's discovery agents misreported fixture locations** (claimed
+  `tests/conftest.py:31`; the real fixtures are in `tests/test_orchestrator.py`).
+  Verified first-hand before wiring.
+
+### Blueprint for the defended-proof sprint (the genuinely-absent layers)
+- A real **input-injection detector** (the thing "CDF" was supposed to be):
+  fires on the user turn / the assembled `prompt_sent`, with classifications.
+- **Per-turn attestation**: wire `src/uahp/qal_chain.py` (`append`/`create_genesis`)
+  + `replay_ledger` into the turn loop so the trust graph sees live traffic
+  (currently session-scoped only; STATUS line 99).
+- A **CSP-style drift metric** if `fringe_pressure` proves insufficient.
+
+### How to run the harness
+```
+# offline acceptance smoke (reproducible)
+python scripts/smoke_telemetry.py --run-id smoke-fake
+# switch the drift signal on
+FRINGE_ENABLED=true python scripts/smoke_telemetry.py --run-id smoke-fringe
+# ablations
+ABLATE_FILTERS=true  python scripts/smoke_telemetry.py --run-id abl-filters
+ABLATE_RECEIPT=true  python scripts/smoke_telemetry.py --run-id abl-receipt
+# a REAL measurement-matrix turn (needs backend creds in .env)
+python scripts/smoke_telemetry.py --run-id baseline-01 --test-type baseline --real
+```
+Output: `runs/<run_id>/telemetry.jsonl` (gitignored).
+
+---
+
 ## How to resume
 
 1. `cd C:\Users\Epsar\Desktop\renee-aiden`

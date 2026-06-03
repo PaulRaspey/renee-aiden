@@ -179,6 +179,18 @@ def _build_anchor_ctx_flags(
     return flags
 
 
+class _PassthroughFilters:
+    """ABLATE_FILTERS: output-quality filters disabled.
+
+    Returns the model text verbatim in an empty FilterReport — no hits, no
+    regeneration hint, no sycophancy flag — so the rest of respond() flows
+    unchanged (the regen branch and the anchor step both read this report).
+    """
+
+    def apply(self, text: str) -> FilterReport:
+        return FilterReport(text=text)
+
+
 class PersonaCore:
     def __init__(
         self,
@@ -203,6 +215,11 @@ class PersonaCore:
 
         self.mood_store = MoodStore(self.persona, self.state_dir)
         self.filters = OutputFilters(self.persona)
+        if os.getenv("ABLATE_FILTERS", "false").lower() == "true":
+            # Clean passthrough: disable output-quality filtering (and the
+            # sycophancy regen it triggers) for this run. Read at construction
+            # like the other always-on layers; the tap marks it disabled.
+            self.filters = _PassthroughFilters()
         self.router = router or LLMRouter()
         self.memory_store = memory_store  # may be None in pure M2 mode
         self.metrics = MetricsStore(self.state_dir)
@@ -231,6 +248,17 @@ class PersonaCore:
         # when FRINGE_ENABLED is false (it's never called in that case).
         self.fringe_tracer = FringeTracer()
 
+    def _fringe_enabled(self) -> bool:
+        """Whether the cognition/fringe layer is active for this turn.
+
+        Honors the existing FRINGE_ENABLED toggle and the ABLATE_FRINGE
+        override (ablation forces it off even when FRINGE_ENABLED=true). Read
+        live, not cached, so tests can toggle env per call as before.
+        """
+        if os.getenv("ABLATE_FRINGE", "false").lower() == "true":
+            return False
+        return os.getenv("FRINGE_ENABLED", "false").lower() == "true"
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -253,10 +281,7 @@ class PersonaCore:
             try:
                 fringe_bias = None
                 bias_weight = 0.0
-                if (
-                    os.getenv("FRINGE_ENABLED", "false").lower() == "true"
-                    and self.fringe.turn_count > 0
-                ):
+                if self._fringe_enabled() and self.fringe.turn_count > 0:
                     fringe_bias = self.fringe.to_retrieval_bias()
                     bias_weight = float(os.getenv("FRINGE_RETRIEVAL_WEIGHT", "0.3"))
                 retrieved = self.memory_store.retrieve(
@@ -271,10 +296,7 @@ class PersonaCore:
 
         # 3. prompt assembly
         fringe_prefix: str | None = None
-        if (
-            os.getenv("FRINGE_ENABLED", "false").lower() == "true"
-            and self.fringe.turn_count > 0
-        ):
+        if self._fringe_enabled() and self.fringe.turn_count > 0:
             fringe_prefix = self.fringe.to_prompt_prefix()
         system_prompt = build_system_prompt(
             self.persona,
@@ -379,7 +401,7 @@ class PersonaCore:
         # Persisted after every update so cross-session continuity survives
         # crashes mid-conversation. Append-only trace line written for the
         # A/B eval week after persistence.
-        if os.getenv("FRINGE_ENABLED", "false").lower() == "true" and self._fringe_embedder is not None:
+        if self._fringe_enabled() and self._fringe_embedder is not None:
             fringe_turn = FringeTurn(
                 user=user_text,
                 assistant=report.text,
@@ -421,16 +443,34 @@ class PersonaCore:
                 # audio bridge after this utterance is spoken.
                 report.text = cap_outcome.farewell
                 report.hits.append("cap_tripped")
-        receipt = sign_receipt(
-            self.identity,
-            task_id=f"turn-{int(time.time()*1000)}",
-            action="persona.respond",
-            duration_ms=duration_ms,
-            success=True,
-            input_data={"user_text": user_text, "mood_before": vars(mood)},
-            output_data={"text": report.text, "mood_after": vars(new_mood), "backend": llm_resp.backend},
-            metadata={"latency_ms_llm": llm_resp.latency_ms, "hits": report.hits},
-        )
+        if os.getenv("ABLATE_RECEIPT", "false").lower() == "true":
+            # Skip signing; emit a clearly-marked sentinel so downstream code
+            # (metrics.record_turn, TurnResult typing) stays well-formed. The
+            # tap records the receipt as disabled and never tries to verify it.
+            receipt = CompletionReceipt(
+                receipt_id="ablated",
+                agent_id=self.identity.agent_id,
+                task_id="",
+                action="persona.respond",
+                timestamp=time.time(),
+                duration_ms=duration_ms,
+                success=True,
+                input_hash="",
+                output_hash="",
+                signature="",
+                metadata={"ablated": True},
+            )
+        else:
+            receipt = sign_receipt(
+                self.identity,
+                task_id=f"turn-{int(time.time()*1000)}",
+                action="persona.respond",
+                duration_ms=duration_ms,
+                success=True,
+                input_data={"user_text": user_text, "mood_before": vars(mood)},
+                output_data={"text": report.text, "mood_after": vars(new_mood), "backend": llm_resp.backend},
+                metadata={"latency_ms_llm": llm_resp.latency_ms, "hits": report.hits},
+            )
 
         # 8. record telemetry for the eval harness
         try:
